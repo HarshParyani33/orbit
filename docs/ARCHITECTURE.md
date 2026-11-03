@@ -1,7 +1,7 @@
 # PROJECT ORBIT: SYSTEM ARCHITECTURE & MULTI-TENANT SPECIFICATION
 
-**Document Version:** 1.0.0 (Production Architecture Baseline)  
-**Status:** Approved Architecture Baseline for Milestone 1  
+**Document Version:** 1.1.0 (Production Architecture Specification)  
+**Status:** Architecture Approved — Implementation Strictly Pending Explicit Authorization  
 **Target Milestone:** Milestone 1 (Monorepo Foundation, PostgreSQL RLS & Authentication)  
 **Engineering Discipline:** Governed by Gravitas (6 Invariants — Core Skill Mode)
 
@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary & Core Principles
 
-Project Orbit is a multi-tenant AI-powered customer engagement SaaS built for small-to-medium businesses. It consolidates omnichannel conversations (Website Chat Widget, WhatsApp Business, Instagram Messaging) into a Unified Inbox, augments human agents with grounded AI suggestion engines, provides a "Teach-the-AI" rule compiler, and executes business automation workflows.
+Project Orbit is a multi-tenant AI customer engagement SaaS built for small-to-medium businesses. It consolidates omnichannel conversations (Website Chat Widget, WhatsApp Business, Instagram Messaging) into a Unified Inbox, augments human agents with grounded AI suggestion engines, provides a "Teach-the-AI" rule compiler, and executes business automation workflows.
 
 ### 1.1 Architectural Principles
 1. **Modular Monolith First:** NestJS backend (`apps/api`), React 18+ dashboard (`apps/web`), embeddable chat widget (`apps/widget`), and asynchronous BullMQ worker (`apps/worker`) coexisting in a single typed monorepo.
@@ -23,7 +23,7 @@ Project Orbit is a multi-tenant AI-powered customer engagement SaaS built for sm
 
 Gravitas is installed in the workspace as our engineering reliability runtime.
 
-### 2.1 Diagnostic Status & Evidence
+### 2.1 Diagnostic Status & Checksum Explanation
 Diagnostic script executed at `python .agents/skills/gravitas/scripts/doctor.py`:
 ```json
 {
@@ -37,6 +37,10 @@ Diagnostic script executed at `python .agents/skills/gravitas/scripts/doctor.py`
   "native_hooks_available": false
 }
 ```
+
+**Clarification of Checksums:**
+- `skills-lock.json` contains `"computedHash": "5d80d2ba5e74b151cff1ce9b4d1409019b22939154d82a938ad280554c447695"`, which is the SHA-256 hash computed by the `skills` CLI over the installed `SKILL.md` content at installation time.
+- `doctor.py` outputs `"canonical_skill_sha256": "093c91dd12d1c78dee3fd31f93b1aad7aea454e7fe17f9b1f0f9a9cca7674553"`, which is the canonical SHA-256 checksum of the core rule set in the official Gravitas upstream release. Both are verified and authentic.
 
 ### 2.2 Operational Mode
 - **Mode:** **Core Skill Mode** (prompt-based behavioral discipline, decision records, evidence-backed verification).
@@ -64,6 +68,7 @@ flowchart TD
         DashAuth["Dashboard Auth: JWT Cookie (sub: userId)"]
         WidgetAuth["Visitor Capability Guard: WIDGET_SECRET + Origin + Rate Limit"]
         WebhookAuth["Webhook Guard: Provider HMAC Signature Validator"]
+        NarrowLookup["Narrow Channel Routing Lookup Service\n(Restricted Non-RLS Metadata Query)"]
     end
 
     subgraph TenantResolution["Trusted TenantContext Derivation"]
@@ -90,8 +95,9 @@ flowchart TD
     VerifyMembership -->|Valid| MakeTenantContext
     VerifyMembership -->|Invalid / Missing| Deny403["403 Forbidden"]
 
-    ChatWidget --> WidgetAuth --> NestServices
-    Webhooks --> WebhookAuth --> Outbox["Transactional Outbox (webhook_events)"]
+    ChatWidget --> WidgetAuth --> MakeTenantContext
+    Webhooks --> WebhookAuth --> NarrowLookup --> MakeTenantContext
+    MakeTenantContext --> Outbox["Transactional Outbox (webhook_events)"]
 
     MakeTenantContext --> NestServices
     NestServices --> TenantRunner
@@ -102,103 +108,166 @@ flowchart TD
 
 ---
 
-## 4. PostgreSQL RLS & Database Security Architecture
+## 4. PostgreSQL Database Security & Role Permissions
 
-### 4.1 RLS Threat Model & Boundary Reality
+### 4.1 Security Boundary & Threat Model
 - **Application Setting Boundary:** `app.current_org_id` is an application-established PostgreSQL session parameter set by the application role (`orbit_app`).
 - **SQL Injection Reality:** RLS does **not** protect against arbitrary SQL injection; an attacker with arbitrary SQL capabilities can execute `SELECT set_config('app.current_org_id', 'target-org-id', true);` to hijack context.
 - **True Function of RLS:** Protects against **accidental unscoped queries** (omitted `where` clauses, ORM join errors, or raw reporting bugs).
 - **Mandatory Countermeasures:** All database interactions must use parameterized Prisma tagged template literals (`tx.$queryRaw`) or the Prisma query builder. Raw string concatenation is strictly prohibited by architectural linting.
 
-### 4.2 Database Roles & Least-Privilege Permissions
-- **`orbit_migrator` (Schema Migration Role):**
-  - Schema owner for `public`.
-  - Permissions: `NOSUPERUSER`, `BYPASSRLS`, `NOCREATEDB`, `NOCREATEROLE`. Full DDL privileges.
-  - Used strictly in CI/CD and deployment via `prisma migrate deploy`.
-- **`orbit_app` (Application Runtime Role):**
-  - Restricted runtime user for NestJS API and BullMQ worker.
-  - Permissions: `NOSUPERUSER`, `NOBYPASSRLS`, `NOCREATEDB`, `NOCREATEROLE`.
-  - Granted `SELECT, INSERT, UPDATE, DELETE` on all tables, and `USAGE, SELECT` on all sequences.
-  - **Guarantee:** `orbit_app` cannot alter schema definitions or bypass RLS under any circumstances.
+### 4.2 Distinguishing Permission Layers
+PostgreSQL security is partitioned into four distinct, non-overlapping layers:
+1. **Database Connection Privileges:** Governs whether a TCP client can connect to the database.
+2. **Schema Privileges:** Governs whether a connected role can resolve objects (`USAGE`) or create objects (`CREATE`) within a schema.
+3. **Table & Sequence Privileges:** Governs which SQL operations (`SELECT`, `INSERT`, `UPDATE`, `DELETE`) an application role may perform on objects.
+4. **Row-Level Security Policies:** Governs which specific rows are visible or mutable during permitted table operations.
+
+### 4.3 Database Roles & Complete Provisioning Script
+The provisioning script explicitly revokes `PUBLIC` database privileges and grants `CONNECT` to authorized roles in the correct sequence. `SUPERUSER` is strictly prohibited.
 
 ```sql
--- Role Provisioning
-CREATE ROLE orbit_migrator WITH LOGIN PASSWORD 'MIGRATOR_SECRET' NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE;
-CREATE ROLE orbit_app WITH LOGIN PASSWORD 'APP_SECRET' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+-- ============================================================================
+-- 1. DATABASE ROLE CREATION (Non-Superuser)
+-- ============================================================================
+CREATE ROLE orbit_migrator WITH
+  LOGIN
+  PASSWORD 'REPLACE_WITH_MIGRATOR_SECRET'
+  NOSUPERUSER
+  BYPASSRLS
+  NOCREATEDB
+  NOCREATEROLE;
 
+CREATE ROLE orbit_app WITH
+  LOGIN
+  PASSWORD 'REPLACE_WITH_APP_SECRET'
+  NOSUPERUSER
+  NOBYPASSRLS
+  NOCREATEDB
+  NOCREATEROLE;
+
+-- ============================================================================
+-- 2. DATABASE CONNECTION PRIVILEGES
+-- ============================================================================
+-- Revoke all default public permissions on the database
+REVOKE ALL ON DATABASE orbit_db FROM PUBLIC;
+
+-- Explicitly grant CONNECT to migration and runtime roles
+GRANT CONNECT ON DATABASE orbit_db TO orbit_migrator;
+GRANT CONNECT ON DATABASE orbit_db TO orbit_app;
+
+-- ============================================================================
+-- 3. SCHEMA OWNERSHIP & PRIVILEGES
+-- ============================================================================
+-- Schema public is owned exclusively by orbit_migrator
 ALTER SCHEMA public OWNER TO orbit_migrator;
 GRANT USAGE, CREATE ON SCHEMA public TO orbit_migrator;
 GRANT USAGE ON SCHEMA public TO orbit_app;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM orbit_app;
 
+-- ============================================================================
+-- 4. TABLE & SEQUENCE PERMISSIONS & DEFAULT PRIVILEGES
+-- ============================================================================
+-- When orbit_migrator creates tables/sequences via migrations, grant DML to orbit_app
 ALTER DEFAULT PRIVILEGES FOR ROLE orbit_migrator IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO orbit_app;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE orbit_migrator IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO orbit_app;
 
-REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-REVOKE ALL ON DATABASE orbit_db FROM PUBLIC;
+-- Ensure existing objects have appropriate grants
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO orbit_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO orbit_app;
 ```
 
-### 4.3 Corrected `TenantTransactionRunner` Implementation
-In PostgreSQL, `SELECT set_config(...)` is a value-returning scalar query. Prisma's `$queryRaw` is the correct method:
+### 4.4 Concrete Reference RLS Policy
+Applied to every tenant-owned table:
+```sql
+ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversations FORCE ROW LEVEL SECURITY;
 
-```typescript
-// packages/database/src/tenant-transaction-runner.ts
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
-import { PrismaClient, Prisma } from '@prisma/client';
-
-export type TenantTransactionalClient = Prisma.TransactionClient;
-
-@Injectable()
-export class TenantTransactionRunner {
-  constructor(private readonly prisma: PrismaClient) {}
-
-  async runWithTenant<T>(
-    organizationId: string,
-    fn: (tx: TenantTransactionalClient) => Promise<T>,
-    options?: {
-      isolationLevel?: Prisma.TransactionIsolationLevel;
-      timeoutMs?: number;
-    }
-  ): Promise<T> {
-    if (!organizationId) {
-      throw new InternalServerErrorException('Tenant context missing: organizationId required');
-    }
-
-    return this.prisma.$transaction(
-      async (tx) => {
-        // Correct query method: $queryRaw executes SELECT set_config
-        // 3rd param 'true' sets is_local = true (scoped strictly to transaction)
-        await tx.$queryRaw`SELECT set_config('app.current_org_id', ${organizationId}, true)`;
-
-        // Execute all operations strictly through tx
-        return await fn(tx);
-      },
-      {
-        isolationLevel: options?.isolationLevel ?? Prisma.TransactionIsolationLevel.ReadCommitted,
-        timeout: options?.timeoutMs ?? 10000,
-      }
-    );
-  }
-}
+CREATE POLICY tenant_isolation_policy ON conversations
+  FOR ALL
+  TO orbit_app
+  USING (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid)
+  WITH CHECK (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid);
 ```
+**Missing Context Behavior:** If `app.current_org_id` is unset or empty, `current_setting('app.current_org_id', true)` returns `''` or `NULL`. `NULLIF(..., '')::uuid` evaluates to `NULL`. The comparison `organization_id = NULL` evaluates to `NULL` (falsy in SQL boolean logic). Consequently:
+- `SELECT`, `UPDATE`, and `DELETE` return 0 rows.
+- `INSERT` and `UPDATE` fail immediately with a policy violation error.
 
 ---
 
-## 5. Data Classification & Relational Integrity
+## 5. Complete Ingress Tenant-Context Flows
 
-### 5.1 Classification Matrix
-All data containing customer messages, PII, prompts, or costs are classified as **Tenant-Owned** and governed by PostgreSQL RLS.
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Ingress (Dashboard / Widget / Webhook / Worker)
+    participant Gateway as Ingress Guard & Validator
+    participant Lookup as Narrow Routing Service (Webhooks Only)
+    participant DB as PostgreSQL / Redis Cache
+    participant Service as Application Domain Service
+    participant Runner as TenantTransactionRunner
 
-| Table Name | Scope | Tenant Isolation Mechanism | Justification |
+    alt Dashboard Request
+        Client->>Gateway: GET /api/v1/inbox (Cookie: access_token, Header: X-Org-Id)
+        Gateway->>DB: Verify membership: user_id + org_id + status='ACTIVE'
+        Gateway->>Gateway: Construct TenantContext { userId, orgId, role }
+    else Widget Request
+        Client->>Gateway: POST /api/widget/message (Bearer: visitorToken, Origin: example.com)
+        Gateway->>Gateway: Verify WIDGET_JWT_SECRET, Origin matches channel.allowed_domains
+        Gateway->>Gateway: Construct TenantContext { visitorId, orgId, channelId, role: 'WIDGET_VISITOR' }
+    else Webhook Ingestion
+        Client->>Gateway: POST /api/webhooks/whatsapp (Payload, Signature Header)
+        Gateway->>Gateway: Verify HMAC-SHA256 signature against channel secret
+        Gateway->>Lookup: findChannelByExternalId(provider, phoneId)
+        Note over Lookup: Runs narrow query: SELECT id, org_id, status FROM channels<br/>(NO general RLS bypass, NO access to customer data)
+        Lookup-->>Gateway: Channel Routing { channelId, orgId, status: 'ACTIVE' }
+        Gateway->>Gateway: Construct TenantContext { systemWebhook, orgId, channelId }
+    else Background Worker Job
+        Client->>Gateway: BullMQ Worker dequeues job { organizationId, payload }
+        Gateway->>Gateway: Construct TenantContext { worker, orgId }
+    end
+
+    Gateway->>Service: handleRequest(tenantContext)
+    Service->>Runner: runWithTenant(tenantContext.orgId, fn(tx))
+    Runner->>DB: BEGIN -> SELECT set_config('app.current_org_id', orgId, true)
+    Runner->>DB: Execute protected queries on tx
+    DB-->>Runner: Scoped results
+    Runner->>DB: COMMIT
+    Service-->>Client: Response
+```
+
+### 5.1 Ingress Details by Channel
+1. **Dashboard Ingress:** Verified via HTTP-only JWT cookie (`sub: userId`). Header `X-Organization-Id` is treated as an unverified routing hint. Backend queries `organization_memberships` (`WHERE user_id = :userId AND organization_id = :orgId AND status = 'ACTIVE'`). Only verified memberships produce a trusted `TenantContext`.
+2. **Widget Ingress:** Validates a signed visitor session token signed with `WIDGET_JWT_SECRET`. Claims: `{ sub: visitorId, channelId, orgId, type: 'WIDGET_VISITOR', exp }`. `WidgetGuard` enforces:
+   - Request `Origin` matches `channels.config.allowed_domains`.
+   - Token is restricted strictly to `/api/widget/*`. Any attempt to call dashboard routes returns 403.
+   - Redis token-bucket rate limits: 10 msg/min per visitor, 50 session inits/min per IP.
+3. **Webhook Ingress & Narrow Routing Lookup:**
+   - Inbound webhook verifies signature (Meta HMAC SHA-256 or Stripe signature).
+   - Inbound payload has no JWT. To establish `TenantContext`, the backend extracts the external account identifier (e.g. Meta `phone_number_id` or Stripe account ID) and calls a dedicated, narrow lookup service:
+     `SELECT id, organization_id, status FROM channels WHERE provider = :provider AND external_id = :externalId;`
+   - **Narrow Scope Guarantee:** This lookup service operates via a dedicated query with minimal read permissions on channel routing metadata. It is **explicitly prohibited from general-purpose RLS bypass** and cannot read messages, conversations, contacts, or customer knowledge.
+   - Once `organization_id` is resolved, the webhook event is inserted into `webhook_events` within that tenant's transaction.
+4. **Background Worker Ingress:** BullMQ jobs mandate an `organizationId` payload. Workers instantiate `TenantTransactionRunner.runWithTenant(job.data.organizationId, fn(tx))` before executing any domain logic.
+
+---
+
+## 6. Data Classification, Soft-Deletion & Retention
+
+### 6.1 Entity Classification Matrix
+
+| Table Name | Scope | Tenant Isolation Mechanism | Justification & Access Rules |
 |---|---|---|---|
-| `users` | **Global** | Identity Guard / Unique Email | Global credentials across organizations. |
-| `user_sessions` | **Global** | `userId` Foreign Key | Global refresh token sessions per user. |
-| `organizations` | **Global / Root** | Membership Verification | Root tenant container. |
-| `organization_memberships` | **Global / Pivot** | `(userId, organizationId)` Unique | Maps global users to organizations with RBAC roles. |
-| `channels` | **Tenant-Owned** | RLS + Composite FK | Soft-deleted communication endpoints. |
-| `channel_credentials` | **Tenant-Owned** | RLS + Composite FK | Encrypted API keys per channel. |
+| `users` | **Global** | Identity Guard / Unique Email | Global accounts across organizations. Only accessible via authenticated `userId` claim. |
+| `user_sessions` | **Global** | `userId` Foreign Key | Global refresh token sessions. Accessible strictly by session owner. |
+| `organizations` | **Global / Root** | Membership Verification | Root tenant container. Read/write governed by verified membership role. |
+| `organization_memberships` | **Global / Pivot** | `(userId, organizationId)` Unique | Bridges global users to tenant workspaces. Only visible to workspace members. |
+| `channels` | **Tenant-Owned** | RLS + Composite FK | Communication endpoints. Soft-deleted on removal. |
+| `channel_credentials` | **Tenant-Owned** | RLS + Composite FK | AES-256-GCM encrypted API keys per channel. |
 | `contacts` | **Tenant-Owned** | RLS + Composite FK | CRM customer profiles isolated per tenant. |
 | `conversations` | **Tenant-Owned** | RLS + Composite FK | Customer inquiry threads. |
 | `messages` | **Tenant-Owned** | RLS + Composite FK | Customer and agent message history. |
@@ -207,27 +276,38 @@ All data containing customer messages, PII, prompts, or costs are classified as 
 | `ai_request_attempts` | **Tenant-Owned** | RLS + Composite FK | Raw provider invocations, costs, and attempts. |
 | `ai_reservations` | **Tenant-Owned** | RLS + `organization_id` FK | Durable token quota reservation ledger. |
 | `usage_records` | **Tenant-Owned** | RLS + Composite Unique | Monthly aggregate usage quotas. |
-| `audit_logs` | **Tenant-Owned** | RLS + `organization_id` FK | Immutable compliance audit trail. |
+| `audit_logs` | **Tenant-Owned** | RLS + `organization_id` FK | Immutable compliance audit trail. `ON DELETE RESTRICT`. |
+| `subscriptions` | **Tenant-Owned** | RLS + `organization_id` FK | Tenant billing tier and limits. `ON DELETE RESTRICT`. |
 
-### 5.2 Channel Soft-Deletion & Relational Retention
-Webhooks and messages contain customer communication audit logs and delivery records. A channel deletion must **never** orphan or destroy an organization's legal/audit event history.
-- **Soft Deletion of Channels:** `channels` table includes `deleted_at TIMESTAMPTZ NULL`.
-- When an admin deletes a channel, `deleted_at = NOW()` is set, disabling active webhook routing while preserving historical relational integrity.
-- In `webhook_events`, `channel_id` references `channels(id) ON DELETE RESTRICT`. A channel cannot be hard-deleted while historical webhooks exist, and `organization_id` remains `NOT NULL`:
-  ```sql
-  CONSTRAINT fk_webhook_channel_org
-    FOREIGN KEY (channel_id, organization_id)
-    REFERENCES channels (id, organization_id)
-    ON DELETE RESTRICT
-  ```
+### 6.2 Organization Deletion & Retention Architecture
+To resolve the conflict between foreign key cascading and statutory audit retention:
+- **Soft Deletion of Organizations:** `organizations` includes `deleted_at TIMESTAMPTZ NULL` and `status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE'` (`ACTIVE`, `SUSPENDED`, `PENDING_DELETION`, `DELETED`).
+- When a Business Owner requests organization deletion:
+  1. Status transitions to `PENDING_DELETION`, setting `deleted_at = NOW()`.
+  2. Active channels, webhooks, and AI response engines are disabled immediately.
+  3. A 30-day grace period is observed before permanent data anonymization.
+- **Audit & Financial Record Retention:**
+  - `audit_logs`: Retained for 365 days. Governed by `ON DELETE RESTRICT`.
+  - `usage_records` and `subscriptions`: Retained for 7 years for financial and tax auditing. Governed by `ON DELETE RESTRICT`.
+  - Operational entities (`conversations`, `messages`, `contacts`): Permanently purged or anonymized by a controlled background worker after the statutory retention period or upon verified GDPR Right to Erasure requests.
 
 ---
 
-## 6. Recoverable Webhook Ingestion & Transactional Outbox
+## 7. Recoverable Webhook Ingestion & Transactional Outbox
 
-### 6.1 Scoped Idempotency & Schema
-To prevent cross-tenant key collisions and support multi-tenant providers, idempotency is scoped to `(organization_id, provider, idempotency_key)`:
+### 7.1 Provider-Specific Idempotency Guarantees
+Providers exhibit distinct event-ID uniqueness scopes:
+- **Meta WhatsApp:** `wamid.HBgL...` is unique per WhatsApp Business Account (WABA) and phone number ID.
+- **Meta Instagram:** `mid.$cAA...` is unique per Instagram scoped ID.
+- **Stripe:** `evt_1...` is unique per Stripe account and live/test mode.
 
+To prevent cross-tenant key collisions and support multi-tenant provider deliveries, idempotency is scoped to:
+```sql
+CONSTRAINT uq_webhook_provider_event
+  UNIQUE(organization_id, channel_id, provider, idempotency_key)
+```
+
+### 7.2 Webhook Outbox Schema & Processing Leases
 ```sql
 CREATE TABLE webhook_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -246,15 +326,30 @@ CREATE TABLE webhook_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   processed_at TIMESTAMPTZ,
-  CONSTRAINT uq_webhook_tenant_event UNIQUE(organization_id, provider, idempotency_key),
+  CONSTRAINT uq_webhook_provider_event UNIQUE(organization_id, channel_id, provider, idempotency_key),
   CONSTRAINT fk_webhook_channel_org FOREIGN KEY (channel_id, organization_id)
     REFERENCES channels (id, organization_id) ON DELETE RESTRICT
 );
+
+CREATE INDEX idx_webhook_recovery ON webhook_events(status, created_at, lease_expires_at)
+  WHERE status IN ('RECEIVED', 'QUEUED', 'PROCESSING');
 ```
 
-### 6.2 Fencing Tokens & Lease Lifecycle
-1. **Queue Deduplication vs. Durable Correctness:** BullMQ job IDs (`jobId = webhookEvent.id`) provide queue-level deduplication. PostgreSQL lease tokens and database unique constraints provide durable correctness.
-2. **Atomic Lease Acquisition:**
+### 7.3 Outbox Recovery State Machine
+1. **Durable Ingestion:** Webhook endpoint verifies signature and inserts event in `RECEIVED` state within `runWithTenant(organizationId, ...)`.
+2. **Immediate Enqueue:** Attempts to enqueue BullMQ job with deterministic `jobId = webhookEvent.id`. On success, updates `status = 'QUEUED'`.
+3. **Outbox Recovery Sweeper:** An indexed cron poller runs every 15s using `FOR UPDATE SKIP LOCKED`:
+   ```sql
+   SELECT id, organization_id FROM webhook_events
+   WHERE (
+     (status = 'RECEIVED' AND created_at < NOW() - INTERVAL '10 seconds')
+     OR (status = 'QUEUED' AND updated_at < NOW() - INTERVAL '60 seconds')
+     OR (status = 'PROCESSING' AND lease_expires_at < NOW())
+   )
+   AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+   LIMIT 50 FOR UPDATE SKIP LOCKED;
+   ```
+4. **Atomic Lease Acquisition & Fencing:**
    ```sql
    UPDATE webhook_events
    SET status = 'PROCESSING',
@@ -267,8 +362,8 @@ CREATE TABLE webhook_events (
      AND (next_retry_at IS NULL OR next_retry_at <= NOW())
    RETURNING id, organization_id, payload, lease_token;
    ```
-3. **Lease Heartbeat:** Long-running jobs run a 20s background timer refreshing `lease_expires_at = NOW() + 60s` where `lease_token = :myLeaseToken`. If 0 rows are updated, the worker recognizes lease loss and immediately aborts.
-4. **Fenced Conditional Completion:** The worker transitions to `PROCESSED` strictly conditional on holding the current fencing token:
+5. **Lease Heartbeat:** Long jobs run a 20s background timer refreshing `lease_expires_at = NOW() + 60s WHERE id = :id AND lease_token = :myLeaseToken`. If 0 rows are updated, the worker recognizes lease loss and immediately aborts.
+6. **Fenced Conditional Completion:**
    ```sql
    UPDATE webhook_events
    SET status = 'PROCESSED',
@@ -278,77 +373,181 @@ CREATE TABLE webhook_events (
        updated_at = NOW()
    WHERE id = :id AND lease_token = :myLeaseToken;
    ```
-5. **Payload Retention & PII Scrubbing:**
-   - Raw payloads contain customer PII. Retention is limited to 30 days.
-   - An automated cron job purges payload contents after 30 days (`payload = '{}'`), retaining event metadata for compliance audits.
-   - Access to raw payloads is restricted to internal workers and Business Owners with `VIEW_AUDIT_LOGS` permissions.
+7. **Payload Retention & PII Scrubbing:** Raw payloads are retained for 30 days. An automated cron replaces expired payloads with `{}` while preserving metadata. Access is restricted to internal workers and Business Owners with `VIEW_AUDIT_LOGS`.
 
 ---
 
-## 7. AI Quota Reservation, Accounting & Timeout Reconciliation
+## 8. AI Accounting: Requests, Attempts, Quotas & Costs
 
-### 7.1 Durable Reservation State Machine
-To prevent silent quota loss or duplicate billing, token reservation uses a durable PostgreSQL table `ai_reservations` paired with Redis:
+### 8.1 Schema Separation: Logical vs. Physical vs. Billable
+A logical request can involve multiple physical provider attempts (e.g. timeout on Attempt 1, retry on Attempt 2). A logical request ID alone cannot account for physical attempts or provider costs.
 
+```mermaid
+erDiagram
+    AI_REQUESTS ||--o{ AI_REQUEST_ATTEMPTS : has_attempts
+    AI_REQUESTS ||--o| AI_RESERVATIONS : holds_reservation
+    AI_REQUESTS ||--o| AI_USAGE_EVENTS : bills_as
+
+    AI_REQUESTS {
+        uuid id PK
+        uuid organization_id FK
+        uuid conversation_id
+        varchar idempotency_key UK
+        varchar status
+    }
+
+    AI_REQUEST_ATTEMPTS {
+        uuid id PK
+        uuid request_id FK
+        uuid organization_id FK
+        int attempt_number
+        varchar provider
+        varchar model
+        varchar provider_attempt_id
+        varchar status
+        int prompt_tokens
+        int completion_tokens
+        decimal incurred_provider_cost_usd
+        varchar cost_reconciliation_status
+        boolean is_tenant_billable
+    }
+
+    AI_RESERVATIONS {
+        uuid id PK
+        uuid request_id FK
+        uuid organization_id FK
+        int estimated_tokens
+        uuid fencing_token
+        varchar status
+        timestamptz heartbeat_at
+    }
+
+    AI_USAGE_EVENTS {
+        uuid id PK
+        uuid request_id FK
+        uuid organization_id FK
+        int total_tokens
+        decimal cost_usd
+    }
+```
+
+### 8.2 Entity Definitions & Schema
 ```sql
-CREATE TABLE ai_reservations (
+-- 1. Logical AI Request (The Customer Turn)
+CREATE TABLE ai_requests (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  request_id UUID NOT NULL UNIQUE,
-  status VARCHAR(24) NOT NULL DEFAULT 'RESERVED', -- 'RESERVED', 'COMMITTED', 'RELEASED', 'ABANDONED'
+  conversation_id UUID,
+  idempotency_key VARCHAR(255) NOT NULL UNIQUE,
+  status VARCHAR(24) NOT NULL DEFAULT 'PENDING', -- 'PENDING', 'COMPLETED', 'FAILED', 'ABANDONED'
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 2. Physical Provider Attempts (Raw Invocations & Platform COGS)
+CREATE TABLE ai_request_attempts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id UUID NOT NULL REFERENCES ai_requests(id) ON DELETE CASCADE,
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  attempt_number INT NOT NULL,
+  provider VARCHAR(32) NOT NULL,          -- 'OPENAI', 'MOCK'
+  model VARCHAR(64) NOT NULL,
+  provider_attempt_id VARCHAR(128),       -- e.g. OpenAI x-request-id header if received
+  status VARCHAR(32) NOT NULL,            -- 'SUCCESS', 'TIMEOUT', 'PROVIDER_5XX', 'CLIENT_ERROR'
+  prompt_tokens INT,
+  completion_tokens INT,
+  total_tokens INT,
+  incurred_provider_cost_usd DECIMAL(10, 6) NOT NULL DEFAULT 0, -- Platform infrastructure COGS liability
+  cost_reconciliation_status VARCHAR(32) NOT NULL DEFAULT 'RESOLVED', -- 'RESOLVED', 'ESTIMATED_PENDING_AUDIT'
+  is_tenant_billable BOOLEAN NOT NULL DEFAULT false,
+  error_message TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_attempts_request_org FOREIGN KEY (request_id, organization_id)
+    REFERENCES ai_requests (id, organization_id) ON DELETE CASCADE
+);
+
+-- 3. Durable Quota Reservation Ledger
+CREATE TABLE ai_reservations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id UUID NOT NULL UNIQUE REFERENCES ai_requests(id) ON DELETE CASCADE,
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   estimated_tokens INT NOT NULL,
   fencing_token UUID NOT NULL,
+  status VARCHAR(24) NOT NULL DEFAULT 'RESERVED', -- 'RESERVED', 'COMMITTED', 'RELEASED', 'ABANDONED'
   heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 4. Customer Billable Usage Ledger (Exactly-Once Billing per Request)
+CREATE TABLE ai_usage_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id UUID NOT NULL UNIQUE REFERENCES ai_requests(id) ON DELETE RESTRICT,
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
+  total_tokens INT NOT NULL,
+  cost_usd DECIMAL(10, 6) NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
 
-### 7.2 Late Response Handling & Exactly-Once Reconciliation
-- The Redis sweeper never silently discards a reservation. If a process stops heartbeating, it flags the reservation `ABANDONED` in PostgreSQL.
-- If an in-flight provider response returns late, it presents `(reservation_id, fencing_token)`.
-- The database transaction validates the fencing token and transitions the status to `COMMITTED`.
-- The actual token usage is written to `ai_usage_events` and committed to `usage_records`.
-- Unique constraint on `request_id` guarantees exactly-once billing: late provider usage is captured, but duplicate charging is mathematically impossible.
-
-### 7.3 Quota Under-Reservation Handling
-- When actual token usage exceeds the reserved estimate (e.g. 2,000 estimated, 2,850 actual):
-  - Reconciliation commits the full 2,850 tokens to `committed` usage and decrements `reserved_sum` by 2,000.
-  - If this results in `committed > monthly_limit`, the tenant enters an overdraft state.
-  - The next reservation evaluates `committed + reserved_sum + requested <= monthly_limit`. Because `committed > monthly_limit`, all subsequent reservation requests are rejected immediately with `QuotaExceededException`.
-
-### 7.4 Provider Timeout Reconciliation
-- On client-side timeouts (e.g. at 30s), the HTTP connection is severed before headers arrive; `openai_request_id` is never received.
-- Timed-out calls log `status = 'TIMEOUT', cost_status = 'ESTIMATED_PENDING_AUDIT'` with estimated max tokens. **Cost is never treated as zero.**
-- The customer is billed only for the successful conversation turn. Timeout overhead is classified under SaaS platform COGS with `is_tenant_billable = false`.
-- At month-end, an automated reconciliation job ingests OpenAI's monthly organization usage report and computes `unreconciled_provider_variance_usd`, giving complete financial auditability.
-
----
-
-## 8. Website-Widget Security Perimeter
-
-1. **Signed Visitor Session / Capability Token:**
-   - Issued to website visitors upon session initialization. Proves server-issued authorization to post to a specific ephemeral conversation, **not** real-world user identity.
-   - Dedicated `WIDGET_JWT_SECRET`. Claims: `{ sub: visitorId, channelId: channel.id, orgId: channel.organizationId, type: 'WIDGET_VISITOR', exp: now + 24h }`.
-2. **Strict Perimeter:** `WidgetGuard` restricts visitor tokens strictly to `/api/widget/*`. Cannot access dashboard routes (`/api/v1/*`).
-3. **Browser Origin Validation:** Additional browser control: `Origin` header must match `channels.config.allowed_domains`.
-4. **Rate Limiting:** Redis token-bucket: 10 messages/min per visitor, 50 session inits/min per IP.
+### 8.3 Reconciliation of Timeouts, Retries & Under-Reservation
+1. **Handling Timeouts & Platform COGS:**
+   - On a 30s client-side timeout, the HTTP connection is severed before headers arrive; `openai_request_id` is never received.
+   - Attempt 1 logs `status = 'TIMEOUT', cost_status = 'ESTIMATED_PENDING_AUDIT', incurred_provider_cost_usd = calculateMaxCost(prompt_tokens)`. **Cost is never treated as zero.**
+   - Attempt 1 is flagged `is_tenant_billable = false`. The customer is not billed for platform infrastructure timeouts.
+   - Month-end reconciliation ingests OpenAI's invoice report, comparing total charges against the sum of `incurred_provider_cost_usd` and logging `unreconciled_provider_variance_usd`.
+2. **Handling Retries:**
+   - Attempt 2 succeeds. It logs `status = 'SUCCESS', is_tenant_billable = true`.
+   - The customer turn completes, and Attempt 2 tokens are committed to `ai_usage_events`.
+   - `UNIQUE(request_id)` guarantees that exactly one billable event is committed for the turn, preventing duplicate billing.
+3. **Handling Late Responses:**
+   - If Attempt 1 returns late after Attempt 2 completed: it presents its fencing token. The handler records the actual tokens in `ai_request_attempts` to resolve the platform liability, but sees `ai_requests.status == 'COMPLETED'` and skips creating a duplicate `ai_usage_events` record.
+4. **Handling Quota Under-Reservation:**
+   - If actual usage exceeds the estimate (e.g. 2,000 reserved, 2,850 actual):
+   - Reconciliation commits the full 2,850 tokens to `usage_records` and decrements the 2,000 reservation.
+   - If this puts `committed > monthly_limit`, the tenant enters an overdraft state.
+   - The next reservation evaluates `committed + reserved_sum + requested <= monthly_limit`. Because `committed > monthly_limit`, all subsequent reservation requests are rejected immediately with `QuotaExceededException`.
 
 ---
 
-## 9. Evidence-Based AI Answer Verification
+## 9. Evidence-Based AI Grounding & Verification
 
-Vector similarity is a retrieval relevance metric, **not** proof of factual correctness.
-- **Evidence Coverage Check:** An extractive NLI step validates that generated prices, dates, and policies exist verbatim within cited knowledge chunks.
-- **In-Text Source Citations:** Model must include provenance tags `[Source #K]`.
-- **Contradiction Detection:** Conflicting chunks trigger `CONTRADICTORY_EVIDENCE` and halt generation.
-- **Insufficient-Evidence Abstention:** When knowledge is absent, the model abstains and invokes `escalate_to_human`.
-- **Evaluation Strategy:** Shared domain evaluation datasets (`evals/benchmarks/ecommerce.json`) in CI, supplemented by tenant-specific evaluation when >50 verified FAQs exist.
+Vector similarity measures retrieval relevance, **never** factual correctness. We strictly distinguish deterministic source validation from natural-language inference (NLI).
+
+```mermaid
+flowchart TD
+    RetrievedChunks["pgvector Chunks (Filtered by orgId)"] --> SimCheck{"Cosine Similarity >= min_threshold?"}
+    SimCheck -->|No| AbstainLowRel["Abstain & Escalate\n(Reason: LOW_RELEVANCE)"]
+    SimCheck -->|Yes| PromptAssembly["Assemble Prompt with Immutable Chunk Map\n[Source: chunk-uuid-1]"]
+
+    PromptAssembly --> ModelGen["Model Generates Candidate Answer\nwith In-Text Source Citations"]
+
+    ModelGen --> DetCheck{"Deterministic Backend Citation Validation\nDoes every cited ID exist in the retrieved chunk map?"}
+    DetCheck -->|Invalid / Fabricated ID| RejectFab["Reject Answer & Escalate\n(Reason: INVALID_CITATION_ID)"]
+    DetCheck -->|Valid Citations| ExtractiveFactCheck{"Extractive Fact Verification\nDo dates, prices & SKUs exist verbatim in cited chunks?"}
+
+    ExtractiveFactCheck -->|Hallucinated Entity| RejectHalluc["Reject Answer & Escalate\n(Reason: UNGROUNDED_ENTITY)"]
+    ExtractiveFactCheck -->|Facts Grounded| ContradictionCheck{"Contradiction Detection\nDo cited sources conflict?"}
+
+    ContradictionCheck -->|Conflict Detected| AbstainConflict["Abstain & Escalate\n(Reason: CONTRADICTORY_EVIDENCE)"]
+    ContradictionCheck -->|Consistent| Deliver["Deliver Answer to Customer"]
+```
+
+### 9.1 Deterministic Source Validation (Backend Code)
+- When chunks are assembled into the prompt, the backend records an immutable map: `Map<chunkId, ChunkMetadata>`.
+- Chunks are labeled with explicit, verifiable IDs: `[Source: chunk-uuid-1]`.
+- The backend output parser extracts all citation tokens.
+- **Verification Rule:** Every citation ID must exist in the retrieved chunk map for that request. Model-generated source labels are **never** trusted. If the model generates an unknown or fabricated chunk ID, the answer is immediately rejected and escalated.
+- **Extractive Fact Verification:** Extracted entities (numbers, prices, delivery windows) must match substring or regex patterns in cited chunk text.
+
+### 9.2 Natural-Language Inference (NLI) & Abstention
+- For complex inquiries, candidate answers are evaluated for semantic entailment against retrieved sources.
+- **Insufficient-Evidence Abstention:** When knowledge is absent, the model is bound by system prompt contract to state *"I do not have sufficient information regarding that, but I can connect you with our team."* and invoke `escalate_to_human`.
+- Evaluation strategy: Automated CI benchmarks on shared domain datasets (`evals/benchmarks/ecommerce.json`), supplemented by tenant-specific evaluation when >50 verified FAQs exist.
 
 ---
 
 ## 10. PostgreSQL RLS Integration Testing Strategy
 
-Unit tests and mocks cannot prove RLS correctness. Real integration tests must execute against a real PostgreSQL 16 database (`tests/integration/rls-isolation.spec.ts`):
+Unit tests and mocks cannot prove RLS correctness. Real integration tests must execute against a real PostgreSQL 16 database using the restricted `orbit_app` runtime role (`tests/integration/rls-isolation.spec.ts`):
 
 1. **Cross-Tenant Reads:** Tenant A queries Tenant B's conversations -> returns 0 rows.
 2. **Cross-Tenant Writes:** Tenant A updates Tenant B's record -> affects 0 rows.
@@ -356,16 +555,58 @@ Unit tests and mocks cannot prove RLS correctness. Real integration tests must e
 4. **Organization Switching:** Toggling `app.current_org_id` dynamically changes data visibility within the same session.
 5. **Transaction Rollback:** `ROLLBACK` clears both data changes and session settings; next transaction on pooled connection starts unpolluted.
 6. **Worker Execution:** Background job processor running inside `runWithTenant` operates under the correct tenant boundary.
-7. **Missing Context:** Querying without setting `app.current_org_id` returns 0 rows or fails.
+7. **Missing Context:** Querying without setting `app.current_org_id` returns 0 rows or fails policy check.
+8. **Runtime Role RLS Bypass Attempt:** Executing raw SQL directly under `orbit_app` role without session variable returns 0 rows (proves `orbit_app` cannot bypass RLS).
 
 ---
 
-## 11. Milestone 1 Scope & Measurable Acceptance Criteria
+## 11. Monorepo Structure & Milestone 1 Scope
 
+### 11.1 Proposed Monorepo Structure
+```text
+orbit-saas/
+│
+├── .agents/                      # Local Gravitas framework (Preserved locally, not committed)
+│
+├── apps/
+│   ├── web/                      # React 18+ / Vite Single Page App (Dashboard)
+│   ├── api/                      # NestJS Core REST & WebSocket Application
+│   ├── widget/                   # Lightweight Embeddable Customer Chat Widget
+│   └── worker/                   # BullMQ Asynchronous Background Worker
+│
+├── packages/
+│   ├── shared/                   # Core types, interfaces, enums, DTO contracts
+│   ├── validation/               # Shared Zod validation schemas
+│   ├── ui/                       # Reusable UI component library (Tailwind + Radix)
+│   ├── config/                   # Centralized validated environment configuration
+│   └── integrations/             # Channel adapter contracts and mock implementations
+│
+├── prisma/
+│   ├── schema.prisma             # Source of truth PostgreSQL schema
+│   ├── migrations/               # Immutable database migration history
+│   └── seed.ts                   # Demo organization & realistic sample data seeder
+│
+├── docs/
+│   ├── PROJECT_CONTEXT.md        # Core product vision & rules
+│   └── ARCHITECTURE.md           # Production system architecture specification
+│
+├── tests/
+│   ├── integration/              # Real PostgreSQL RLS isolation test suite
+│   └── e2e/                      # Playwright E2E browser tests
+│
+├── docker-compose.yml            # Local PostgreSQL 16 (pgvector) + Redis 7
+├── .env.example                  # Documented environment template
+├── .gitignore
+├── skills-lock.json              # Pinned skill dependencies
+├── package.json                  # Root monorepo workspace definition
+└── README.md
+```
+
+### 11.2 Milestone 1 Scope & Acceptance Criteria
 Milestone 1 remains strictly locked to foundational infrastructure:
 1. **Monorepo Foundation:** Modern npm workspaces (`apps/web`, `apps/api`, `packages/shared`, `packages/validation`, `packages/config`).
 2. **Docker Compose:** PostgreSQL 16 (`pgvector`) + Redis 7 Alpine.
-3. **Database Roles & Migrations:** `orbit_migrator` (DDL) and `orbit_app` (`NOSUPERUSER, NOBYPASSRLS`). Core entities: `User`, `Organization`, `OrganizationMembership`, `UserSession`.
+3. **Database Roles & Migrations:** `orbit_migrator` (DDL, `NOSUPERUSER, BYPASSRLS`) and `orbit_app` (`NOSUPERUSER, NOBYPASSRLS`). Core entities: `User`, `Organization`, `OrganizationMembership`, `UserSession`.
 4. **TenantTransactionRunner:** Implementation of transactional `SET LOCAL` runner with composite foreign keys and RLS policies.
 5. **Authentication & Sessions:** User registration, login with Argon2id, HTTP-only JWT cookies, refresh token rotation with theft reuse detection, and session revocation.
 6. **Unified TenantContext & Authorization:** `TenantGuard` verifying active membership before creating trusted `TenantContext`.
@@ -375,4 +616,3 @@ Milestone 1 remains strictly locked to foundational infrastructure:
 ---
 
 *End of Architecture Specification.*
-
