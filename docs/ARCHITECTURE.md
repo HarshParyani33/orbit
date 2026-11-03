@@ -375,3 +375,4 @@ Milestone 1 remains strictly locked to foundational infrastructure:
 ---
 
 *End of Architecture Specification.*
+

@@ -39,3 +39,4 @@ Skill dependencies are pinned in `skills-lock.json`.
 ## 📄 License
 
 Proprietary — All rights reserved.
+
