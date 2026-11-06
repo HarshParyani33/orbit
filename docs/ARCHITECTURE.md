@@ -1,6 +1,6 @@
 # PROJECT ORBIT: SYSTEM ARCHITECTURE & MULTI-TENANT SPECIFICATION
 
-**Document Version:** 1.1.3 (Production Architecture Specification)  
+**Document Version:** 1.1.4 (Production Architecture Specification)  
 **Status:** Architecture Approved — Implementation Strictly Pending Explicit Authorization  
 **Target Milestone:** Milestone 1 (Monorepo Foundation, PostgreSQL RLS & Authentication)  
 **Engineering Discipline:** Governed by Gravitas (6 Invariants — Core Skill Mode)
@@ -67,8 +67,8 @@ flowchart TD
     subgraph AuthLayer["Authentication & Ingress Security"]
         DashAuth["Dashboard Auth: JWT Cookie (sub: userId)"]
         WidgetAuth["Visitor Capability Guard: WIDGET_SECRET + Origin + Rate Limit"]
-        WebhookAuth["Webhook Guard: Meta App Secret / Stripe Endpoint Secret (Raw Body HMAC)"]
-        RoutingSecurityDefiner["resolve_channel_routing(provider, external_id)\n(SECURITY DEFINER Function — NO Direct Table Access for orbit_app)"]
+        WebhookAuth["Webhook Guard: Cryptographic HMAC Signature Verification (Raw Body Buffer)"]
+        IngressLookup["resolve_channel_routing(provider, external_id)\n(Dedicated orbit_ingress Role: ZERO table access, STRICT SECURITY DEFINER)"]
     end
 
     subgraph TenantResolution["Trusted TenantContext Derivation"]
@@ -79,7 +79,7 @@ flowchart TD
 
     subgraph OutboxDispatcher["Webhook Outbox & Dispatch Engine"]
         OutboxTable["Transactional Outbox (webhook_events)\ndispatch_status: PENDING_DISPATCH"]
-        ImmediateDispatch["Immediate HTTP Handler Dispatch\n(Claims dispatch_token -> Adds to BullMQ)"]
+        ImmediateDispatch["Immediate HTTP Handler Dispatch\n(Claims dispatch_token -> Enqueues to BullMQ)"]
         DispatchSweeper["Background Dispatch Sweeper\n(FOR UPDATE SKIP LOCKED + BullMQ Job ID = event.id)"]
         BullMQQueue[("BullMQ Redis Queue: webhooks")]
     end
@@ -92,6 +92,7 @@ flowchart TD
 
     subgraph DataPlane["PostgreSQL 16 Engine"]
         RoleApp["Role: orbit_app (NOSUPERUSER, NOBYPASSRLS)"]
+        RoleIngress["Role: orbit_ingress (NOSUPERUSER, NOBYPASSRLS, ZERO Table Access)"]
         RLS["PostgreSQL RLS Engine (FORCE ROW LEVEL SECURITY)"]
         Tables[("Tenant Tables with Composite Foreign Keys")]
     end
@@ -103,7 +104,7 @@ flowchart TD
     VerifyMembership -->|Invalid / Missing| Deny403["403 Forbidden"]
 
     ChatWidget --> WidgetAuth --> MakeTenantContext
-    Webhooks --> WebhookAuth --> RoutingSecurityDefiner --> MakeTenantContext
+    Webhooks --> WebhookAuth --> IngressLookup --> MakeTenantContext
     MakeTenantContext --> OutboxTable
     OutboxTable --> ImmediateDispatch --> BullMQQueue
     OutboxTable --> DispatchSweeper --> BullMQQueue
@@ -112,6 +113,7 @@ flowchart TD
     NestServices --> TenantRunner
     BullMQQueue --> WorkerJobs --> TenantRunner
 
+    IngressLookup -.-> RoleIngress
     TenantRunner --> RoleApp --> RLS --> Tables
 ```
 
@@ -155,15 +157,24 @@ CREATE ROLE orbit_app WITH
   NOCREATEDB
   NOCREATEROLE;
 
+CREATE ROLE orbit_ingress WITH
+  LOGIN
+  PASSWORD 'REPLACE_WITH_INGRESS_SECRET'
+  NOSUPERUSER
+  NOBYPASSRLS
+  NOCREATEDB
+  NOCREATEROLE;
+
 -- ============================================================================
 -- 2. DATABASE CONNECTION PRIVILEGES
 -- ============================================================================
 -- Revoke all default public permissions on the database
 REVOKE ALL ON DATABASE orbit_db FROM PUBLIC;
 
--- Explicitly grant CONNECT to migration and runtime roles
+-- Explicitly grant CONNECT to migration, runtime, and ingress roles
 GRANT CONNECT ON DATABASE orbit_db TO orbit_migrator;
 GRANT CONNECT ON DATABASE orbit_db TO orbit_app;
+GRANT CONNECT ON DATABASE orbit_db TO orbit_ingress;
 
 -- ============================================================================
 -- 3. SCHEMA OWNERSHIP & PRIVILEGES
@@ -172,8 +183,11 @@ GRANT CONNECT ON DATABASE orbit_db TO orbit_app;
 ALTER SCHEMA public OWNER TO orbit_migrator;
 GRANT USAGE, CREATE ON SCHEMA public TO orbit_migrator;
 GRANT USAGE ON SCHEMA public TO orbit_app;
+GRANT USAGE ON SCHEMA public TO orbit_ingress;
+
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE CREATE ON SCHEMA public FROM orbit_app;
+REVOKE CREATE ON SCHEMA public FROM orbit_ingress;
 
 -- ============================================================================
 -- 4. TABLE & SEQUENCE PERMISSIONS & DEFAULT PRIVILEGES
@@ -185,17 +199,26 @@ ALTER DEFAULT PRIVILEGES FOR ROLE orbit_migrator IN SCHEMA public
 ALTER DEFAULT PRIVILEGES FOR ROLE orbit_migrator IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO orbit_app;
 
--- Ensure existing objects have appropriate grants
+-- Ensure existing objects have appropriate grants for orbit_app
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO orbit_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO orbit_app;
+
+-- orbit_ingress receives ZERO direct table or sequence privileges
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM orbit_ingress;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM orbit_ingress;
+
+-- Ensure btree_gist extension is available for temporal constraints
+CREATE EXTENSION IF NOT EXISTS btree_gist;
 ```
 
 ### 4.4 Narrow Routing Lookup Table & SECURITY DEFINER Control
 To completely prevent normal application code or compromised tenant queries from enumerating, reading, or tampering with routing mappings across organizations:
 
 1. `channel_routing_lookups` is owned by `orbit_migrator`.
-2. Direct access on `channel_routing_lookups` is **strictly revoked from `orbit_app`**.
-3. All reads and writes must pass through explicit `SECURITY DEFINER` functions with fixed `search_path = public, pg_temp`.
+2. Direct table access on `channel_routing_lookups` is **strictly revoked from both `orbit_app` and `orbit_ingress`**.
+3. Inbound ingress resolution is granted **exclusively to `orbit_ingress`** via `resolve_channel_routing()`. General application code (`orbit_app`) is denied execution of this function.
+4. Channel management writes are granted **exclusively to `orbit_app`** via tenant-bounded functions `register_channel_routing()` and `deregister_channel_routing()`.
+5. All functions enforce `SET search_path = public, pg_temp` and input validation.
 
 ```sql
 -- ============================================================================
@@ -238,19 +261,18 @@ CREATE TABLE channel_routing_lookups (
 );
 
 -- Composite Index for tenant cleanup, joins, and soft-delete synchronization
--- (uq_channel_routing_provider_ext already indexes provider + external_account_id)
 CREATE INDEX idx_channel_routing_org_channel 
   ON channel_routing_lookups(organization_id, channel_id);
 
--- REVOKE DIRECT ACCESS: orbit_app CANNOT directly SELECT, INSERT, UPDATE, or DELETE
-REVOKE ALL ON TABLE channel_routing_lookups FROM PUBLIC, orbit_app;
+-- REVOKE DIRECT ACCESS: Neither orbit_app nor orbit_ingress can directly access this table
+REVOKE ALL ON TABLE channel_routing_lookups FROM PUBLIC, orbit_app, orbit_ingress;
 
 -- ============================================================================
 -- 6. SECURITY DEFINER ROUTING FUNCTIONS
 -- ============================================================================
 
 -- Function 1: Webhook Ingress Lookup (Unauthenticated Pre-Tenant Resolution)
--- Exposes ONLY the minimum 3 routing fields. Prevents table enumeration.
+-- Strictly granted to orbit_ingress ONLY. orbit_app has NO execute permission.
 CREATE OR REPLACE FUNCTION resolve_channel_routing(
   p_provider VARCHAR,
   p_external_account_id VARCHAR
@@ -274,19 +296,19 @@ BEGIN
   RETURN QUERY
   SELECT c.channel_id, c.organization_id, c.status
   FROM channel_routing_lookups c
-  WHERE c.provider = p_provider
-    AND c.external_account_id = p_external_account_id
+  WHERE c.provider = trim(p_provider)
+    AND c.external_account_id = trim(p_external_account_id)
     AND c.status = 'ACTIVE'
   LIMIT 1;
 END;
 $$;
 
 ALTER FUNCTION resolve_channel_routing(VARCHAR, VARCHAR) OWNER TO orbit_migrator;
-REVOKE ALL ON FUNCTION resolve_channel_routing(VARCHAR, VARCHAR) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION resolve_channel_routing(VARCHAR, VARCHAR) TO orbit_app;
+REVOKE ALL ON FUNCTION resolve_channel_routing(VARCHAR, VARCHAR) FROM PUBLIC, orbit_app;
+GRANT EXECUTE ON FUNCTION resolve_channel_routing(VARCHAR, VARCHAR) TO orbit_ingress;
 
 -- Function 2: Authorized Channel Routing Registration (Tenant-Bounded)
--- Verifies that app.current_org_id matches the channel before inserting.
+-- Strictly granted to orbit_app ONLY. Validates channel existence, ownership, active status, and provider match.
 CREATE OR REPLACE FUNCTION register_channel_routing(
   p_channel_id UUID,
   p_provider VARCHAR,
@@ -300,26 +322,53 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_current_org UUID;
-  v_channel_valid BOOLEAN;
+  v_channel_record RECORD;
+  v_clean_provider VARCHAR;
+  v_clean_ext_id VARCHAR;
 BEGIN
+  -- 1. Verify tenant context established via SET LOCAL
   v_current_org := NULLIF(current_setting('app.current_org_id', true), '')::UUID;
   IF v_current_org IS NULL THEN
     RAISE EXCEPTION 'Unauthorized: tenant context app.current_org_id is not set'
       USING ERRCODE = 'insufficient_privilege';
   END IF;
 
-  -- Ensure channel belongs strictly to the authenticated tenant
-  SELECT EXISTS(
-    SELECT 1 FROM channels
-    WHERE id = p_channel_id AND organization_id = v_current_org AND deleted_at IS NULL
-  ) INTO v_channel_valid;
-
-  IF NOT v_channel_valid THEN
-    RAISE EXCEPTION 'Unauthorized: channel does not belong to active organization'
+  -- 2. Clean input strings
+  v_clean_provider := trim(p_provider);
+  v_clean_ext_id := trim(p_external_account_id);
+  IF length(v_clean_provider) = 0 OR length(v_clean_ext_id) = 0 THEN
+    RAISE EXCEPTION 'Invalid parameters: provider and external account identifier must be non-empty'
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
-  -- Atomic upsert: cannot claim an external account belonging to another tenant
+  -- 3. Comprehensive channel verification: exists, belongs to tenant, not deleted, active, matching provider
+  SELECT id, organization_id, provider, status, deleted_at
+  INTO v_channel_record
+  FROM channels
+  WHERE id = p_channel_id AND organization_id = v_current_org;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Unauthorized: channel does not exist in the active organization'
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
+  IF v_channel_record.deleted_at IS NOT NULL THEN
+    RAISE EXCEPTION 'Invalid operation: cannot register routing for a deleted channel'
+      USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+
+  IF v_channel_record.status <> 'ACTIVE' THEN
+    RAISE EXCEPTION 'Invalid operation: channel must be ACTIVE to register routing'
+      USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+
+  IF v_channel_record.provider <> v_clean_provider THEN
+    RAISE EXCEPTION 'Provider mismatch: channel provider % does not match requested routing provider %',
+      v_channel_record.provider, v_clean_provider
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
+  -- 4. Atomic upsert: cannot claim an external account belonging to another tenant
   INSERT INTO channel_routing_lookups (
     channel_id,
     organization_id,
@@ -331,8 +380,8 @@ BEGIN
   VALUES (
     p_channel_id,
     v_current_org,
-    p_provider,
-    p_external_account_id,
+    v_clean_provider,
+    v_clean_ext_id,
     'ACTIVE',
     NOW()
   )
@@ -345,7 +394,7 @@ BEGIN
 
   IF NOT FOUND AND EXISTS (
     SELECT 1 FROM channel_routing_lookups 
-    WHERE provider = p_provider AND external_account_id = p_external_account_id
+    WHERE provider = v_clean_provider AND external_account_id = v_clean_ext_id
   ) THEN
     RAISE EXCEPTION 'Conflict: external account identifier is already registered by another organization'
       USING ERRCODE = 'unique_violation';
@@ -354,7 +403,7 @@ END;
 $$;
 
 ALTER FUNCTION register_channel_routing(UUID, VARCHAR, VARCHAR) OWNER TO orbit_migrator;
-REVOKE ALL ON FUNCTION register_channel_routing(UUID, VARCHAR, VARCHAR) FROM PUBLIC;
+REVOKE ALL ON FUNCTION register_channel_routing(UUID, VARCHAR, VARCHAR) FROM PUBLIC, orbit_ingress;
 GRANT EXECUTE ON FUNCTION register_channel_routing(UUID, VARCHAR, VARCHAR) TO orbit_app;
 
 -- Function 3: Authorized Channel Routing Deregistration (Tenant-Bounded)
@@ -382,15 +431,16 @@ END;
 $$;
 
 ALTER FUNCTION deregister_channel_routing(UUID) OWNER TO orbit_migrator;
-REVOKE ALL ON FUNCTION deregister_channel_routing(UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION deregister_channel_routing(UUID) FROM PUBLIC, orbit_ingress;
 GRANT EXECUTE ON FUNCTION deregister_channel_routing(UUID) TO orbit_app;
 ```
 
-### 4.5 Why This Permission Model is Substantially Safer
-1. **No Wildcard Table Enumeration:** `orbit_app` cannot issue `SELECT * FROM channel_routing_lookups;`. An attacker with compromised credentials cannot harvest foreign phone numbers, Instagram IDs, or list competitor organizations.
-2. **Preventing Cross-Tenant Hijacking:** Writing routing rows directly via table grants would allow a malicious or buggy query to rewrite another organization's `channel_id`. The `register_channel_routing` function enforces that `current_setting('app.current_org_id')` owns the channel and rejects overwrites of another organization's registered external account.
-3. **Fixed `search_path` Security:** All functions enforce `SET search_path = public, pg_temp`, preventing search-path hijacking attacks common in PostgreSQL `SECURITY DEFINER` functions.
-4. **Minimal Field Surface:** Only the 3 necessary routing attributes (`channel_id`, `organization_id`, `status`) are returned. Zero secrets or customer messages exist in this table.
+### 4.5 Security Properties of the Ingress Role & Lookup Model
+1. **Isolated Role Boundary (`orbit_ingress`):** The NestJS `apps/api` application initializes a dedicated, minimal connection pool (max 5 connections) configured strictly with `orbit_ingress` credentials (`INGRESS_DATABASE_URL`). This pool is injected exclusively into `WebhookIngressService`.
+2. **Zero Global Table Exposure:** `orbit_ingress` has no `SELECT` permissions on any tables or views in the database. It cannot query `users`, `conversations`, `messages`, `contacts`, or even `channel_routing_lookups` directly.
+3. **No Probing from General Application Code:** Because `resolve_channel_routing()` is revoked from `orbit_app`, ordinary tenant services and compromised dashboard sessions cannot invoke the function to probe or enumerate foreign external account identifiers.
+4. **Signature Gating:** Webhook ingress controllers execute cryptographic signature verification over the raw body buffer BEFORE invoking `resolve_channel_routing()`. Unauthenticated requests are rejected at the edge with HTTP 401/403 and never hit the database.
+5. **Fixed `search_path` Security:** All functions enforce `SET search_path = public, pg_temp`, preventing search-path hijacking attacks common in PostgreSQL `SECURITY DEFINER` functions.
 
 ### 4.6 Concrete Reference RLS Policy
 Applied to every tenant-owned table:
@@ -417,10 +467,10 @@ sequenceDiagram
     autonumber
     actor Client as Ingress (Dashboard / Widget / Webhook / Worker)
     participant Gateway as Ingress Guard & Validator
-    participant Func as resolve_channel_routing() [SECURITY DEFINER]
+    participant Func as resolve_channel_routing() [orbit_ingress Role]
     participant DB as PostgreSQL / Redis Cache
     participant Service as Application Domain Service
-    participant Runner as TenantTransactionRunner
+    participant Runner as TenantTransactionRunner [orbit_app Role]
 
     alt Dashboard Request
         Client->>Gateway: GET /api/v1/inbox (Cookie: access_token, Header: X-Org-Id)
@@ -433,8 +483,8 @@ sequenceDiagram
     else Webhook Ingestion
         Client->>Gateway: POST /api/webhooks/whatsapp (Payload, X-Hub-Signature-256)
         Gateway->>Gateway: Verify raw body HMAC-SHA256 using META_APP_SECRET
-        Gateway->>Func: SELECT channel_id, organization_id, status FROM resolve_channel_routing(:provider, :phoneId)
-        Note over Func: Executes with orbit_migrator privileges.<br/>Validates inputs, returns only 3 routing fields.<br/>(NO general table access, NO customer data)
+        Gateway->>Func: resolve_channel_routing(:provider, :phoneId) via orbit_ingress pool
+        Note over Func: Executes as orbit_ingress.<br/>Zero table access; returns only 3 routing fields.<br/>(NO general table access, NO customer data)
         Func-->>Gateway: Routing Record { channelId, orgId, status: 'ACTIVE' }
         Gateway->>Gateway: Construct TenantContext { systemWebhook, orgId, channelId }
     else Background Worker Job
@@ -459,13 +509,13 @@ sequenceDiagram
    - Redis token-bucket rate limits: 10 msg/min per visitor, 50 session inits/min per IP.
 3. **Webhook Ingress & Narrow Routing Lookup:**
    - Inbound webhook verifies signature via provider-specific verification adapter using the system-level platform secret (e.g. `META_APP_SECRET` or Stripe Webhook Endpoint Secret).
-   - Inbound payload has no JWT or tenant header. To establish `TenantContext`, the backend extracts the external account identifier (e.g. Meta `phone_number_id` or Stripe account ID) and calls the `resolve_channel_routing` function:
+   - Inbound payload has no JWT or tenant header. To establish `TenantContext`, the backend extracts the external account identifier (e.g. Meta `phone_number_id` or Stripe account ID) and calls `resolve_channel_routing` using the dedicated `orbit_ingress` connection pool:
      ```sql
      SELECT channel_id, organization_id, status
      FROM resolve_channel_routing(:provider, :externalAccountId);
      ```
-   - **Narrow Scope Guarantee:** Direct table queries on `channel_routing_lookups` are revoked from `orbit_app`. If no record is found or status is not `ACTIVE`, the request is rejected immediately with 404/400.
-   - Once `organization_id` is resolved, the webhook event is inserted into `webhook_events` within that tenant's transaction via `TenantTransactionRunner.runWithTenant(organizationId, ...)`.
+   - **Narrow Scope Guarantee:** Direct table queries on `channel_routing_lookups` are revoked from both `orbit_app` and `orbit_ingress`. If no record is found or status is not `ACTIVE`, the request is rejected immediately with 404/400.
+   - Once `organization_id` is resolved, the webhook event is inserted into `webhook_events` within that tenant's transaction via `TenantTransactionRunner.runWithTenant(organizationId, ...)` using the standard `orbit_app` pool.
 4. **Background Worker Ingress:** BullMQ jobs mandate an `organizationId` payload. Workers instantiate `TenantTransactionRunner.runWithTenant(job.data.organizationId, fn(tx))` before executing any domain logic.
 
 ---
@@ -488,7 +538,7 @@ sequenceDiagram
 | `messages` | **Tenant-Owned** | RLS + Composite FK | Active Customer Lifetime | Customer and agent message history. Anonymized on organization deletion. |
 | `webhook_events` | **Tenant-Owned** | RLS + Composite FK + Outbox | 30 Days Payload / 90 Days Metadata | Raw customer webhooks. Payloads wiped after 30 days. `ON DELETE RESTRICT`. |
 | `ai_requests` | **Tenant-Owned** | RLS + Composite FK | 7 Years (Financial Audit) | Logical customer AI turns. `ON DELETE RESTRICT`. |
-| `ai_model_pricing_schedules` | **Global / System** | Read-Only Catalog | Indefinite (Versioned) | Historical model pricing rate table. Read-only for `orbit_app`. |
+| `ai_model_pricing_schedules` | **Global / System** | Read-Only Catalog | Indefinite (Versioned) | Historical model pricing rate table with temporal exclusion constraints. Read-only for `orbit_app`. |
 | `ai_request_attempts` | **Tenant-Owned** | RLS + Composite FK | 7 Years (Financial Audit) | Physical provider attempts and platform COGS liabilities. `ON DELETE RESTRICT`. |
 | `ai_reservations` | **Tenant-Owned** | RLS + Composite FK | 30 Days (Operational) | Durable token quota reservation ledger. `ON DELETE CASCADE`. |
 | `ai_usage_events` | **Tenant-Owned** | RLS + Composite FK | 7 Years (Statutory Tax) | Customer-billable ledger events. `ON DELETE RESTRICT`. |
@@ -616,10 +666,10 @@ stateDiagram-v2
 ```
 
 #### 1. Dual Dispatch Architecture: Immediate vs. Sweeper Enqueue
-Project Orbit implements **At-Least-Once Delivery to the Queue** and **Exactly-Once Execution in the Database Engine**.
+Project Orbit implements **At-Least-Once Delivery to the Queue** and **Fenced Idempotent State Transitions in PostgreSQL**.
 
 - **Path A: Immediate HTTP-Handler Enqueue (Low Latency):**
-  1. The HTTP handler derives `organization_id` via `resolve_channel_routing()`.
+  1. The HTTP handler derives `organization_id` via `resolve_channel_routing()` using the `orbit_ingress` connection pool.
   2. Inside `TenantTransactionRunner.runWithTenant(organizationId, fn(tx))`, inserts into `webhook_events`:
      ```sql
      INSERT INTO webhook_events (
@@ -690,7 +740,7 @@ PostgreSQL remains the durable source of truth. Redis and BullMQ act as transien
 | **Crash Point 4** | Redis restart or cache eviction while event marked `DISPATCHED` | DB: `dispatch_status = 'DISPATCHED'`, but `processing_status = 'UNCLAIMED'`. Queue: Job lost. | Stale Dispatched Sweeper detects `updated_at < NOW() - 15m`. Resets `dispatch_status = 'PENDING_DISPATCH'`. Dispatch Sweeper re-enqueues to BullMQ. | Durable: Lost Redis jobs recovered. |
 | **Crash Point 5** | Worker crashes mid-execution | DB: `processing_status = 'PROCESSING'`, `lease_expires_at` in past. Queue: Stalled. | Processing Recovery Sweeper detects expired lease. Resets to `UNCLAIMED` with exponential backoff or marks `DEAD_LETTER` if `attempt_count >= max_attempts`. | Resilient: Poison pills quarantined. |
 
-#### 3. Worker Processing Claim & Lease Protocol (BullMQ to Execution)
+#### 3. Worker Processing Claim & External Side-Effect Idempotency
 - **Worker Lease Claim:** Worker picks up BullMQ job and acquires an atomic processing lease:
   ```sql
   UPDATE webhook_events
@@ -713,6 +763,10 @@ PostgreSQL remains the durable source of truth. Redis and BullMQ act as transien
   WHERE id = :id AND lease_token = :myWorkerLeaseToken;
   ```
   If 0 rows are updated, the worker has lost the lease (e.g. network partition or freeze) and immediately aborts execution.
+- **Handling External Side Effects (Outbound Calls):**
+  When processing involves invoking external APIs (e.g. Meta Graph API for sending messages or Stripe API for billing actions), network partitions can occur after the external API accepted the request but before the worker persisted success in PostgreSQL. To prevent duplicate external actions upon retry:
+  1. *Deterministic Client Request Tokens:* All outbound requests pass deterministic idempotency keys derived from the turn identifier (e.g. `Idempotency-Key: biz_msg_${conversation_id}_${message_id}`).
+  2. *Status Reconciliation Pre-Flight:* Before re-issuing an external side effect on retry, the worker verifies if the external action already completed (e.g., querying the message delivery or charge status).
 - **Fenced Conditional Completion:**
   ```sql
   UPDATE webhook_events
@@ -830,19 +884,25 @@ CREATE TABLE ai_requests (
 
 -- 2. System Model Pricing Schedules Catalog
 -- Relational versioning of provider rates over time. Read-only for orbit_app.
+-- Enforces temporal non-overlapping ranges per provider and canonical model via btree_gist.
 CREATE TABLE ai_model_pricing_schedules (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   provider VARCHAR(32) NOT NULL,            -- 'OPENAI', 'ANTHROPIC', 'MOCK'
   canonical_model VARCHAR(64) NOT NULL,     -- 'gpt-4o-mini', 'claude-3-5-sonnet'
   model_alias VARCHAR(64),                  -- 'gpt-4o-mini-latest', 'gpt-4o-mini-2024-07-18'
   pricing_version VARCHAR(32) NOT NULL,     -- '2024-07-18-v1', '2024-10-01-v1'
-  prompt_token_rate_per_m DECIMAL(10, 6) NOT NULL,     -- e.g. 0.150000 ($0.15 per 1M tokens)
-  completion_token_rate_per_m DECIMAL(10, 6) NOT NULL, -- e.g. 0.600000 ($0.60 per 1M tokens)
+  prompt_token_rate_per_m DECIMAL(10, 6) NOT NULL,     -- Currency units per 1,000,000 prompt tokens
+  completion_token_rate_per_m DECIMAL(10, 6) NOT NULL, -- Currency units per 1,000,000 completion tokens
   currency VARCHAR(8) NOT NULL DEFAULT 'USD',
   effective_from TIMESTAMPTZ NOT NULL,
   effective_to TIMESTAMPTZ,                 -- NULL indicates currently active schedule
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT uq_pricing_provider_model_version UNIQUE (provider, canonical_model, pricing_version)
+  CONSTRAINT uq_pricing_provider_model_version UNIQUE (provider, canonical_model, pricing_version),
+  CONSTRAINT ex_pricing_no_overlap EXCLUDE USING gist (
+    provider WITH =,
+    canonical_model WITH =,
+    tstzrange(effective_from, COALESCE(effective_to, 'infinity'::timestamptz), '[)') WITH &&
+  )
 );
 
 CREATE INDEX idx_pricing_lookup 
@@ -852,6 +912,7 @@ GRANT SELECT ON ai_model_pricing_schedules TO orbit_app;
 
 -- 3. Physical Provider Attempts (Raw Invocations & Platform COGS)
 -- Stores immutable rate snapshots for 100% financial reproducibility.
+-- NO hardcoded defaults for pricing_version or cost_currency.
 CREATE TABLE ai_request_attempts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   request_id UUID NOT NULL,
@@ -870,7 +931,7 @@ CREATE TABLE ai_request_attempts (
   pricing_version VARCHAR(32) NOT NULL,     -- Applied schedule version (e.g. '2024-07-18-v1')
   prompt_rate_per_m DECIMAL(10, 6) NOT NULL,     -- Snapshot rate active at attempt time
   completion_rate_per_m DECIMAL(10, 6) NOT NULL, -- Snapshot rate active at attempt time
-  cost_currency VARCHAR(8) NOT NULL DEFAULT 'USD',
+  cost_currency VARCHAR(8) NOT NULL,             -- Persisted strictly from matching schedule's currency
   incurred_provider_cost_usd DECIMAL(10, 6),     -- Platform COGS liability (NULL until calculated)
   cost_reconciliation_status VARCHAR(32) NOT NULL DEFAULT 'PENDING', -- 'PENDING', 'KNOWN', 'ESTIMATED', 'UNKNOWN', 'RECONCILED'
   is_tenant_billable BOOLEAN NOT NULL DEFAULT false,
@@ -926,7 +987,11 @@ Hardcoded default pricing strings in schemas or code risk silently assigning obs
    ORDER BY effective_from DESC
    LIMIT 1;
    ```
-2. **Immutable Snapshot on Every Attempt:** The selected rates are recorded in `ai_request_attempts`. When a provider changes prices, an administrator inserts a new schedule with a new `effective_from` date and sets `effective_to` on the prior version. Past attempts remain completely reproducible because they link to frozen snapshot rates.
+2. **Missing Schedule Fail-Closed Protocol:** If no valid pricing schedule exists for the requested `(provider, canonical_model)`, the invocation fails pre-flight with `MissingPricingScheduleException`. The system never guesses rates or fabricates zero. If an unconfigured provider call somehow occurs, it is flagged with `cost_reconciliation_status = 'UNKNOWN'` and `incurred_provider_cost_usd = NULL` (never 0.00).
+3. **Exact Mathematical Calculation:** Cost calculations strictly adhere to unit precision:
+   $$\text{Cost} = \left(\text{prompt\_tokens} \times \frac{\text{prompt\_token\_rate\_per\_m}}{1\,000\,000}\right) + \left(\text{completion\_tokens} \times \frac{\text{completion\_token\_rate\_per\_m}}{1\,000\,000}\right)$$
+   Values are stored with 6 decimal places (`DECIMAL(10, 6)`), ensuring exact fractional-cent accuracy.
+4. **Immutable Snapshot on Every Attempt:** The selected rates are recorded in `ai_request_attempts`. When a provider changes prices, an administrator inserts a new schedule with a new `effective_from` date and sets `effective_to` on the prior version. Past attempts remain completely reproducible because they link to frozen snapshot rates.
 
 ### 8.4 Separation of Platform COGS vs. Tenant Billing
 Platform cost accounting and customer retail billing represent separate financial ledgers and must never be conflated:
@@ -1009,7 +1074,11 @@ Unit tests and mocks cannot prove RLS correctness. Real integration tests must e
 6. **Connection Pool Leak Prevention:** Verifies that when a connection is returned to the pool after `COMMIT` or `ROLLBACK`, subsequent queries on that pooled connection without a new tenant context return 0 rows (no leaked session parameters across requests).
 7. **Dynamic Tenant Switching:** Verifies that switching tenants requires a new transaction and that no residual visibility from Tenant A persists when executing as Tenant B.
 8. **Runtime Role Restrictions:** Verifies that tests execute strictly under the `orbit_app` role (`NOSUPERUSER, NOBYPASSRLS`). Direct bypass attempts via raw SQL return 0 rows.
-9. **Routing Lookup Security Definer Verification:** Verifies that `orbit_app` CANNOT execute direct SELECT/INSERT/UPDATE on `channel_routing_lookups`, and can only resolve via `resolve_channel_routing()` or mutate via tenant-bound `register_channel_routing()`.
+9. **Ingress Role & Security Definer Restrictions:**
+   - Verifies that `orbit_ingress` role CANNOT execute `SELECT`, `INSERT`, `UPDATE`, or `DELETE` on any database table (throws permission denied error).
+   - Verifies that `orbit_ingress` CAN execute `resolve_channel_routing()`.
+   - Verifies that `orbit_app` CANNOT execute `resolve_channel_routing()` (throws permission denied error).
+   - Verifies that `register_channel_routing()` fails if the referenced channel is soft-deleted, inactive, belongs to another organization, or specifies a mismatched provider.
 
 > [!NOTE]
 > **Verification Status:** Static relational schema integrity, composite foreign key consistency, role permissions, and state transition contracts have been verified via static schema validation scripts and Gravitas discipline. Live PostgreSQL execution tests remain conceptual at this planning phase and will be executed when Milestone 1 implementation is authorized.
@@ -1062,11 +1131,11 @@ orbit-saas/
 Milestone 1 remains strictly locked to foundational infrastructure:
 1. **Monorepo Foundation:** Modern npm workspaces (`apps/web`, `apps/api`, `packages/shared`, `packages/validation`, `packages/config`).
 2. **Docker Compose:** PostgreSQL 16 (`pgvector`) + Redis 7 Alpine.
-3. **Database Roles & Migrations:** `orbit_migrator` (DDL, `NOSUPERUSER, BYPASSRLS`) and `orbit_app` (`NOSUPERUSER, NOBYPASSRLS`). Core entities: `User`, `Organization`, `OrganizationMembership`, `UserSession`, `channel_routing_lookups`.
+3. **Database Roles & Migrations:** `orbit_migrator` (DDL, `NOSUPERUSER, BYPASSRLS`), `orbit_app` (`NOSUPERUSER, NOBYPASSRLS`), and `orbit_ingress` (`NOSUPERUSER, NOBYPASSRLS, ZERO Table Access`). Core entities: `User`, `Organization`, `OrganizationMembership`, `UserSession`, `channels`, `channel_routing_lookups`, `ai_model_pricing_schedules`.
 4. **TenantTransactionRunner:** Implementation of transactional `SET LOCAL` runner with composite foreign keys and RLS policies.
 5. **Authentication & Sessions:** User registration, login with Argon2id, HTTP-only JWT cookies, refresh token rotation with theft reuse detection, and session revocation.
 6. **Unified TenantContext & Authorization:** `TenantGuard` verifying active membership before creating trusted `TenantContext`.
-7. **Automated RLS Tenant-Isolation Test Suite:** Integration tests executing against real PostgreSQL proving cross-tenant isolation.
+7. **Automated RLS Tenant-Isolation Test Suite:** Integration tests executing against real PostgreSQL proving cross-tenant isolation and role privilege boundaries.
 8. **Minimal Authenticated Dashboard:** React dashboard displaying user profile, active organization, workspace switcher, and logout.
 
 ---
