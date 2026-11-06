@@ -13,6 +13,7 @@ dist/
 build/
 out/
 .next/
+*.tsbuildinfo
 
 # Agent local tooling & skills cache (preserved locally, restored via skills-lock.json)
 .agents/

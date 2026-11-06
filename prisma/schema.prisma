@@ -1,0 +1,169 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ==============================================================================
+// 1. GLOBAL IDENTITY & MEMBERSHIP MODELS (Category D — Application Guarded)
+// ==============================================================================
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique @db.VarChar(255)
+  name         String   @db.VarChar(128)
+  passwordHash String   @map("password_hash") @db.VarChar(255)
+  status       String   @default("ACTIVE") @db.VarChar(24) // ACTIVE, SUSPENDED, DELETED
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  sessions    UserSession[]
+  memberships OrganizationMembership[]
+
+  @@map("users")
+}
+
+model UserSession {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  tokenHash String   @map("token_hash") @db.VarChar(128)
+  familyId  String   @default(uuid()) @map("family_id") @db.Uuid
+  isRevoked Boolean  @default(false) @map("is_revoked")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz()
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("user_sessions")
+}
+
+model Organization {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String    @db.VarChar(128)
+  slug      String    @unique @db.VarChar(64)
+  status    String    @default("ACTIVE") @db.VarChar(24) // ACTIVE, SUSPENDED, PENDING_DELETION, DELETED
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz()
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  memberships OrganizationMembership[]
+  channels    Channel[]
+
+  @@map("organizations")
+}
+
+model OrganizationMembership {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  role           String   @default("MEMBER") @db.VarChar(24) // OWNER, ADMIN, MEMBER
+  status         String   @default("ACTIVE") @db.VarChar(24) // ACTIVE, INVITED, SUSPENDED
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId], name: "uq_membership_org_user")
+  @@index([userId])
+  @@map("organization_memberships")
+}
+
+// ==============================================================================
+// 2. TENANT-DOMAIN DATA MODELS (Category A — Governed by PostgreSQL RLS)
+// ==============================================================================
+
+model Channel {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  provider       String    @db.VarChar(32) // META_WHATSAPP, META_INSTAGRAM, WEB_CHAT
+  name           String    @db.VarChar(64)
+  status         String    @default("ACTIVE") @db.VarChar(24)
+  config         Json      @default("{}")
+  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz()
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  routingLookups ChannelRoutingLookup[]
+  conversations  Conversation[]
+
+  @@unique([id, organizationId], name: "uq_channels_id_org")
+  @@index([organizationId])
+  @@map("channels")
+}
+
+model Conversation {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  channelId      String   @map("channel_id") @db.Uuid
+  status         String   @default("OPEN") @db.VarChar(24) // OPEN, RESOLVED, SNOOZED
+  title          String?  @db.VarChar(255)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  channel  Channel   @relation(fields: [channelId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  messages Message[]
+
+  @@unique([id, organizationId], name: "uq_conversations_id_org")
+  @@index([organizationId, status])
+  @@map("conversations")
+}
+
+model Message {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  senderType     String   @map("sender_type") @db.VarChar(24) // CUSTOMER, AGENT, AI, SYSTEM
+  content        String   @db.Text
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  conversation Conversation @relation(fields: [conversationId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@index([organizationId, conversationId])
+  @@map("messages")
+}
+
+// ==============================================================================
+// 3. SYSTEM CATALOGS & ROUTING METADATA (Categories B & C)
+// ==============================================================================
+
+model ChannelRoutingLookup {
+  id                String   @id @default(uuid()) @db.Uuid
+  provider          String   @db.VarChar(32)
+  externalAccountId String   @map("external_account_id") @db.VarChar(128)
+  channelId         String   @map("channel_id") @db.Uuid
+  organizationId    String   @map("organization_id") @db.Uuid
+  status            String   @default("ACTIVE") @db.VarChar(24)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  channel Channel @relation(fields: [channelId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([provider, externalAccountId], name: "uq_channel_routing_provider_ext")
+  @@index([organizationId, channelId])
+  @@map("channel_routing_lookups")
+}
+
+model AiModelPricingSchedule {
+  id                      String    @id @default(uuid()) @db.Uuid
+  provider                String    @db.VarChar(32)
+  canonicalModel          String    @map("canonical_model") @db.VarChar(64)
+  modelAlias              String?   @map("model_alias") @db.VarChar(64)
+  pricingVersion          String    @map("pricing_version") @db.VarChar(32)
+  promptTokenRatePerM     Decimal   @map("prompt_token_rate_per_m") @db.Decimal(10, 6)
+  completionTokenRatePerM Decimal   @map("completion_token_rate_per_m") @db.Decimal(10, 6)
+  currency                String    @default("USD") @db.VarChar(8)
+  effectiveFrom           DateTime  @map("effective_from") @db.Timestamptz()
+  effectiveTo             DateTime? @map("effective_to") @db.Timestamptz()
+  createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@unique([provider, canonicalModel, pricingVersion], name: "uq_pricing_provider_model_version")
+  @@index([provider, canonicalModel, effectiveFrom, effectiveTo])
+  @@map("ai_model_pricing_schedules")
+}

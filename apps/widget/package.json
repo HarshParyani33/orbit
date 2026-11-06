@@ -1,0 +1,14 @@
+{
+  "name": "@orbit/widget",
+  "version": "0.1.0",
+  "description": "Customer chat widget foundation for Project Orbit",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

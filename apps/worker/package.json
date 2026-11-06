@@ -1,0 +1,19 @@
+{
+  "name": "@orbit/worker",
+  "version": "0.1.0",
+  "description": "BullMQ worker foundation for Project Orbit",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@orbit/config": "*",
+    "@orbit/shared": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

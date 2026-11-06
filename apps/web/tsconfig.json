@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "noEmit": true
+  },
+  "references": [
+    { "path": "../../packages/shared" },
+    { "path": "../../packages/validation" },
+    { "path": "../../packages/ui" }
+  ],
+  "include": ["src/**/*"]
+}

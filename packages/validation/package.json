@@ -1,0 +1,17 @@
+{
+  "name": "@orbit/validation",
+  "version": "0.1.0",
+  "description": "Shared Zod validation schemas for Project Orbit",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
