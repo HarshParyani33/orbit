@@ -6,19 +6,27 @@
 **Milestone:** `Milestone 1 — Foundation, Multi-Tenant Security, Authentication & Minimal Dashboard`  
 **Governance:** `Gravitas Core Skill Mode (6 Invariants Strictly Enforced)`  
 **Repository:** `HarshParyani33/orbit`  
-**Verification Baseline:** `54 / 54 Integration Tests Passing (PostgreSQL 16 pgvector + Redis 7)`
+**Verification Baseline:** `65 / 65 Passing Tests (18 DB Infrastructure + 18 DB Auth/Concurrency + 24 Guard/Controller Unit + 5 Frontend Refresh Unit)`
 
 ---
 
 ## 1. Executive Summary & Gravitas Governance
 
-During the final security inspection of Milestone 1, seven specific findings were identified spanning route-level IDOR risks, race conditions in refresh token rotation, suspended account session lifecycle, CSRF posture for cookie-authenticated endpoints, local development infrastructure hardening, registration transaction atomicity, and extended role/organization authorization boundaries.
+During the security audits of Milestone 1, seven primary server-side findings and four critical refinement findings were identified:
+1. Route-level Insecure Direct Object Reference (IDOR) risks.
+2. Server-side race conditions in refresh token rotation (`FOR UPDATE` row locking required).
+3. Suspended account session revival and stateless JWT lifecycle.
+4. CSRF protection hardening, specifically eliminating the `Sec-Fetch-Site` cross-site bypass and documenting CORS contracts.
+5. Local development infrastructure hardening (localhost binding and strictly required superuser credentials without default fallback).
+6. Registration transaction atomicity and failure rollback.
+7. Role RBAC and organization authorization boundary tests.
+8. Frontend single-flight refresh concurrency to prevent client-induced session family theft revocation.
 
-Following the mandatory **Gravitas discipline** (`python .agents/skills/gravitas/scripts/doctor.py` confirming Core Skill Mode, canonical skill hash `093c91dd12d1c78dee3fd31f93b1aad7aea454e7fe17f9b1f0f9a9cca7674553`), all seven findings were systematically reproduced, corrected with defense-in-depth controls, and verified via automated integration tests against real PostgreSQL 16 and Redis 7 instances.
+Following the mandatory **Gravitas discipline** (`python .agents/skills/gravitas/scripts/doctor.py` confirming Core Skill Mode, canonical skill hash `093c91dd12d1c78dee3fd31f93b1aad7aea454e7fe17f9b1f0f9a9cca7674553`), all findings were systematically reproduced, corrected, and verified with direct evidence.
 
 ---
 
-## 2. Findings, Root Cause Analysis, Corrections & Verification Evidence
+## 2. Findings, Root Causes, Corrections & Technical Contracts
 
 ### Finding 1: Organization IDOR & Route Parameter Context Alignment
 
@@ -34,13 +42,6 @@ In `OrganizationsController`, the route `GET /api/organizations/:id` accepted `:
 2. **Controller-Level Defense-in-Depth (`apps/api/src/organizations/organizations.controller.ts`):**
    - `getOrganization` and `addMember` handlers receive `@CurrentTenant() tenant: TenantContext` and explicitly verify `if (orgId !== tenant.orgId) throw new ForbiddenException('Route parameter does not match verified tenant context');`.
    - Domain retrieval executes against `tenant.orgId` directly.
-
-#### Verification Evidence
-- `tests/integration/security-pass.spec.ts`:
-  - `blocks User A from accessing Org B via route parameter (403 Forbidden)`: PASSED.
-  - `rejects mismatched X-Organization-ID header vs route parameter (403 Forbidden)`: PASSED.
-  - `allows User A to access Org A when route param matches verified membership`: PASSED.
-  - `controller rejects mismatched param even if guard was somehow bypassed (Defense in Depth)`: PASSED.
 
 ---
 
@@ -69,11 +70,6 @@ Previously, `AuthService.refresh` retrieved the session record with `prisma.user
      ```
    - The revocation is committed to PostgreSQL before returning an error, and the method throws 401 Unauthorized (`Security alert: Attempted reuse of rotated refresh token. All active sessions have been revoked.`).
 
-#### Verification Evidence
-- `tests/integration/security-pass.spec.ts`:
-  - `executes atomic token rotation with row locking (FOR UPDATE)`: PASSED.
-  - `concurrent refresh requests with identical token: exactly one succeeds and second triggers theft revocation`: PASSED (`Promise.allSettled` proves 1 fulfilled, 1 rejected with theft alert, and the newly issued session family revoked).
-
 ---
 
 ### Finding 3: Suspended Account Session Revival & Stateless JWT Window
@@ -91,150 +87,191 @@ If an administrative action suspended a user (`users.status = 'SUSPENDED'`), exi
 3. **Tenant Context Fail-Closed (`TenantGuard`):**
    - `TenantGuard` verifies `user.status === 'ACTIVE'` on every incoming tenant request. Even if a suspended user possesses an unexpired stateless JWT, every tenant endpoint rejects the request with 403 Forbidden (`User account is suspended or deactivated`).
 
-#### Architectural Trade-off & Stateless Access Token Window
-- **Access Token TTL:** Access tokens are short-lived, signed JWTs with a **15-minute expiration window**.
-- **Stateless Validity Boundary:** Because access tokens are stateless, an already-issued JWT remains structurally valid for authentication signatures until its 15-minute expiration, **without hitting the database for non-tenant static routes**.
-- **Mitigation & Defense-in-Depth:**
-  1. The token lifetime is deliberately capped at 15 minutes.
-  2. All tenant data endpoints require `TenantGuard`, which performs an active database check verifying that `user.status === 'ACTIVE'` and `organization.status === 'ACTIVE'`, immediately blocking access.
-  3. In Milestone 2 / production, a low-latency Redis JWT denylist can be evaluated in `JwtAuthGuard` if sub-second global invalidation of stateless tokens is required.
-
-#### Verification Evidence
-- `tests/integration/security-pass.spec.ts`:
-  - `prevents suspended user from logging in (401 Unauthorized)`: PASSED.
-  - `prevents suspended user from refreshing session (401 Unauthorized)`: PASSED.
-  - `prevents suspended user from fetching profile (401 Unauthorized)`: PASSED.
-  - `prevents suspended user from entering tenant context in TenantGuard (403 Forbidden)`: PASSED.
+#### Architectural Trade-off: Stateless Access Token Window (15 Minutes)
+- **Token Format & TTL:** Access tokens are stateless, signed JWTs with a **15-minute expiration window**.
+- **Limitation Boundary:** Because access tokens are stateless and verified by cryptographic signature without hitting the database on non-tenant endpoints, an already-issued JWT remains structurally valid for authentication signatures until its 15-minute expiration.
+- **Mitigation in Place:**
+  1. Token lifetime is strictly capped at 15 minutes.
+  2. All tenant data endpoints require `TenantGuard`, which performs an active database query verifying that `user.status === 'ACTIVE'` and `organization.status === 'ACTIVE'`, failing closed immediately.
+  3. Session refresh is immediately blocked, preventing new access tokens from being generated.
+- **Milestone 2 Consideration:** If sub-second global invalidation of stateless access tokens on static routes is required, a low-latency Redis JWT revocation denylist must be evaluated in `JwtAuthGuard`.
 
 ---
 
-### Finding 4: Cross-Site Request Forgery (CSRF) Protection
+### Finding 4: CSRF Protection & Sec-Fetch-Site Bypass Correction
 
 #### Vulnerability Description
-HTTP-only authentication cookies with `SameSite=Lax` provide baseline protection against cross-site POSTs in modern browsers, but defense-in-depth requires explicit Origin verification and protection for state-mutating requests against sub-domain takeovers, legacy user agents, and cross-site framing.
+In the initial `CsrfGuard`, line 82 checked:
+```typescript
+const customHeader =
+  request.headers['x-csrf-token'] ||
+  request.headers['x-requested-with'] ||
+  request.headers['sec-fetch-site'];
+```
+Because `request.headers['sec-fetch-site']` was treated as an authorized custom header, a cross-site request where the browser explicitly sent `Sec-Fetch-Site: cross-site` with no Origin/Referer was mistakenly authorized. The mere presence of the browser's fetch metadata header bypassed CSRF protection.
 
-#### Corrective Engineering
-1. **Dedicated Global Guard (`apps/api/src/auth/csrf.guard.ts`):**
-   - Registered as a global guard (`APP_GUARD`) in `AppModule`.
-   - Safe HTTP methods (`GET`, `HEAD`, `OPTIONS`) are permitted without state mutation checks.
-   - Programmatic requests using `Authorization: Bearer <token>` (without ambient auth cookies) bypass CSRF checks, as browsers do not attach custom authorization headers automatically in cross-origin requests.
-2. **Origin & Referer Enforcement for Cookie-Authenticated Mutations:**
-   - If auth cookies (`access_token` or `refresh_token`) are present on a mutating method (`POST`, `PUT`, `PATCH`, `DELETE`):
-     - `Origin` (or fallback `Referer`) is parsed and checked against an allowed origin whitelist (`process.env.FRONTEND_URL`, `http://localhost:5173`, `http://localhost:3000`, `http://localhost:4000`).
-     - Requests from unauthorized origins (e.g. `https://malicious-attacker.com`) are rejected with 403 Forbidden.
-     - Requests lacking both Origin and Referer must provide a custom security header (`X-CSRF-Token` or `X-Requested-With`) to ensure browser SOP preflight enforcement.
-
-#### Verification Evidence
-- `tests/integration/security-pass.spec.ts`:
-  - `allows safe HTTP GET requests with cookies regardless of origin`: PASSED.
-  - `allows non-cookie requests (e.g. Bearer token clients) on state mutations`: PASSED.
-  - `allows cookie-authenticated state mutations with trusted Origin`: PASSED.
-  - `blocks cookie-authenticated state mutations from unauthorized Origin (403 Forbidden)`: PASSED.
-  - `blocks cookie-authenticated state mutations with missing Origin/Referer without custom header (403 Forbidden)`: PASSED.
-  - `allows cookie-authenticated state mutations if custom security header is present`: PASSED.
+#### Corrective Engineering (`apps/api/src/auth/csrf.guard.ts`)
+1. **Explicit Cross-Site Rejection:**
+   - Any cookie-authenticated state mutation where `Sec-Fetch-Site === 'cross-site'` is **unconditionally rejected** with `ForbiddenException('Cross-Site Request Forgery (CSRF) blocked: Sec-Fetch-Site is cross-site')`.
+2. **Fetch Metadata Provenance Logic:**
+   - `same-origin`: Accepted as browser-guaranteed same-origin provenance.
+   - `same-site`: Only accepted if the `Origin` or `Referer` is present and matches the configured `allowedOrigins` whitelist, or if a valid custom header is present. A same-site request without origin or custom header fails closed.
+   - `none`: Only accepted if Origin matches allowed origins or custom header is present.
+3. **Strict Origin & Referer Whitelist:**
+   - If `Origin` or `Referer` is supplied, it MUST match `this.allowedOrigins` (`FRONTEND_URL`, `http://localhost:5173`, `http://localhost:3000`, `http://localhost:4000`). Mismatched origins are rejected with 403 Forbidden.
+4. **Custom Header Security Contract (`X-CSRF-Token`, `X-Requested-With`):**
+   - Custom headers are accepted when Origin/Referer are absent (e.g. specialized clients or privacy-stripped referrers) based strictly on the browser **Same-Origin Policy (SOP) and CORS Preflight contract**.
+   - Browsers forbid cross-origin JavaScript from setting non-simple custom headers (like `X-Requested-With` or `X-CSRF-Token`) without an explicit CORS preflight response allowing them (`Access-Control-Allow-Headers`).
+   - In `apps/api/src/main.ts`, CORS origins are strictly restricted to `FRONTEND_URL`. Therefore, an untrusted third-party site cannot forge custom headers in cross-origin requests.
+   - **Important Clarification:** `X-Requested-With` is NOT a secret CSRF token; its protection derives exclusively from browser SOP and CORS preflight enforcement.
+5. **Login CSRF Considerations:**
+   - In Project Orbit, `POST /api/auth/login` and `POST /api/auth/register` are credentialed endpoints that do not rely on ambient session cookies (`hasAuthCookie` is false).
+   - Standard Login CSRF involves an attacker logging a victim into the attacker's account via cross-site requests. Because session cookies use `SameSite=Lax`, modern browsers do not send cross-site POST cookies.
+   - In `apps/web/src/api/client.ts`, all state-mutating requests (including login and register) automatically attach `X-Requested-With: XMLHttpRequest`, ensuring that CORS preflight prevents cross-origin submission even from legacy user agents.
 
 ---
 
 ### Finding 5: Database Dev Configuration Hardening
 
 #### Vulnerability Description
-`docker-compose.yml` previously exposed PostgreSQL (`5432:5432`) and Redis (`6379:6379`) on `0.0.0.0`, binding them to all host network interfaces. Furthermore, a fixed superuser password was hardcoded directly in the service environment definition without fallback support.
+`docker-compose.yml` previously exposed PostgreSQL (`5432:5432`) and Redis (`6379:6379`) on `0.0.0.0`, and contained a predictable default password fallback (`${POSTGRES_PASSWORD:-postgres_master_dev_password}`).
 
 #### Corrective Engineering
-1. **Localhost Interface Binding (`docker-compose.yml`):**
-   - Ports are bound strictly to `127.0.0.1`:
+1. **Localhost Binding:**
+   - Both services are bound strictly to `127.0.0.1` (`127.0.0.1:5432:5432` and `127.0.0.1:6379:6379`).
+2. **Required Environment Variable (No Fallback):**
+   - Updated `docker-compose.yml` to use required variable expansion:
      ```yaml
-     postgres:
-       ports:
-         - "127.0.0.1:5432:5432"
-     redis:
-       ports:
-         - "127.0.0.1:6379:6379"
+     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in environment or .env}
      ```
-2. **Environment Variable Fallback:**
-   - Superuser credentials now support external environment overrides:
-     ```yaml
-     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_master_dev_password}
-     ```
-3. **Template Documentation (`.env.example`):**
-   - Added clear instructions in `.env.example` documenting `POSTGRES_PASSWORD` and reminding operators that production secrets must be high-entropy, independently managed credentials.
-
-#### Verification Evidence
-- `tests/integration/security-pass.spec.ts`:
-  - `verifies docker-compose.yml binds PostgreSQL and Redis to 127.0.0.1`: PASSED.
-  - `verifies docker-compose.yml does not use fixed committed superuser password without env fallback`: PASSED.
-  - `verifies .env.example contains POSTGRES_PASSWORD template`: PASSED.
+   - If `POSTGRES_PASSWORD` is unset, `docker compose` immediately aborts with an error rather than starting with a predictable default.
+3. **Safe Documentation:**
+   - Updated `.env.example` with clear instructions that developers must copy the template to `.env` and set a strong password.
 
 ---
 
 ### Finding 6: Registration Transaction Atomicity
 
 #### Vulnerability Description
-`AuthService.register` previously created the `User`, the default `Organization` with `OrganizationMembership`, and the initial `UserSession` across separate sequential Prisma invocations. If any downstream query failed (e.g., organization slug conflict, constraint error, or network timeout), an orphaned user was left in the database with no associated workspace or valid session.
+`AuthService.register` previously created `User`, `Organization`, `OrganizationMembership`, and `UserSession` across separate sequential queries. A failure in organization creation (e.g. slug conflict or database error) left orphaned user records in PostgreSQL.
 
 #### Corrective Engineering
-1. **Atomic Interactive Transaction (`apps/api/src/auth/auth.service.ts`):**
-   - The entire registration workflow is encapsulated within `this.prisma.$transaction(async (tx) => ...)`:
-     1. Uniqueness check for email.
-     2. Password hashing via Argon2id.
-     3. User record creation.
-     4. Default organization creation with OWNER membership.
-     5. Access token and refresh token generation.
-     6. Initial session creation in `user_sessions`.
-2. **Rollback Guarantee:**
-   - Any unhandled exception or database error automatically issues a PostgreSQL `ROLLBACK`, guaranteeing that either all entities exist or none do.
-
-#### Verification Evidence
-- `tests/integration/security-pass.spec.ts`:
-  - `creates user, organization, owner membership, and initial session atomically`: PASSED.
-  - `rolls back completely if a failure occurs during registration (zero orphaned records)`: PASSED (verified that when a transaction failure is triggered, zero user records remain in PostgreSQL).
+- Encapsulated `AuthService.register` within `this.prisma.$transaction(async (tx) => ...)`.
+- All entities (User, Org, Owner Membership, Session) succeed or fail as an indivisible atomic unit.
+- If an error occurs, PostgreSQL issues an automatic `ROLLBACK`, guaranteeing zero orphaned records.
 
 ---
 
-### Finding 7: Extended Role & Organization Authorization Boundaries
+### Finding 7: Frontend Refresh Concurrency & Single-Flight Client
 
-#### Vulnerability Description
-Fine-grained authorization boundaries needed explicit verification across domain controllers:
-1. Preventing regular members from adding new members.
-2. Preventing administrators from exceeding their authority (e.g. attempting to invite another admin or granting the OWNER role).
-3. Enforcing fail-closed behavior when accessing suspended organizations.
+#### Problem Description
+When multiple dashboard components render simultaneously with an expired 15-minute access token, each component independently issues an API request receiving HTTP 401. If the client does not serialize token refresh, multiple concurrent calls to `POST /api/auth/refresh` will hit the server at the exact same millisecond with the same refresh token. Because the server enforces atomic rotation with row locking and theft detection, the second concurrent refresh triggers emergency session family revocation!
 
-#### Corrective Engineering
-1. **Invitation RBAC (`apps/api/src/organizations/organizations.service.ts`):**
-   - `addMember` verifies that only `OWNER` and `ADMIN` can invite members.
-   - Explicitly rejects invitations with `role === 'OWNER'` (`The OWNER role cannot be granted through invitations`).
-   - Explicitly prevents an `ADMIN` from inviting another `ADMIN` (`Only organization owners can invite new administrators`).
-2. **Suspended Organization Fail-Closed (`apps/api/src/tenancy/tenant.guard.ts`):**
-   - `TenantGuard` verifies `organization.status === 'ACTIVE'`.
-   - If an organization is suspended (`status: 'SUSPENDED'`), requests fail closed with 403 Forbidden (`Organization is suspended or inactive`).
-
-#### Verification Evidence
-- `tests/integration/security-pass.spec.ts`:
-  - `blocks regular MEMBER from adding new members to an organization (403 Forbidden)`: PASSED.
-  - `blocks ADMIN from granting the OWNER role (403 Forbidden)`: PASSED.
-  - `blocks ADMIN from creating another ADMIN (Only OWNER can invite ADMIN)`: PASSED.
-  - `blocks access to SUSPENDED organizations via TenantGuard (403 Forbidden)`: PASSED.
+#### Corrective Engineering (`apps/web/src/api/client.ts`)
+1. **Single-Flight Interceptor (`refreshPromise`):**
+   - When an API request receives a 401 Unauthorized, it invokes `requestTokenRefresh()`.
+   - If a refresh operation is already in-flight, subsequent requests receive the **same shared promise** rather than dispatching a duplicate HTTP request.
+2. **Atomic Queue Resolution & Retry:**
+   - When the single refresh completes with HTTP 200, all waiting requests unblock simultaneously and retry their original requests once (`_retry: true`) with the newly issued ambient cookies.
+3. **Failure Handling & No Replay of Consumed Tokens:**
+   - If token refresh fails (e.g. expired or revoked), `refreshPromise` resolves to `false`.
+   - All waiting requests reject immediately (`Session expired or revoked. Please log in again.`).
+   - The registered `authFailureHandler` clears local session state (`user = null`, `organizations = []`, `orbit_active_org_id` removed).
+   - Under no circumstances does the client retry a consumed refresh token.
 
 ---
 
-## 3. Comprehensive Verification Matrix
+## 3. Test Suite Taxonomy & Verification Evidence
 
+To ensure complete verification accuracy and prevent conflating unit/guard tests with real database integration tests, the test suite is partitioned into four distinct categories:
+
+```text
+================================================================================
+TEST SUITE EXECUTION SUMMARY
+================================================================================
+Test Files  5 passed (5)
+Tests       65 passed (65)
+Duration    4.64s
 ```
-Test Files  4 passed (4)
-Tests       54 passed (54)
-Duration    4.67s
+
+### Category 1: Real Database & PostgreSQL Role Integration Tests (18 tests)
+*Executed against live PostgreSQL 16 (pgvector) container in WSL2.*
+
+| Test File | Tests | Focus Area | Verification Status |
+|---|:---:|---|:---:|
+| `tests/integration/db-permissions.spec.ts` | 11 | Direct SQL verification of `orbit_app`, `orbit_migrator`, `orbit_ingress` roles. Proves `orbit_app` is `NOSUPERUSER, NOBYPASSRLS`, cannot create tables, cannot access `_prisma_migrations`, and table privileges strictly match Categories A, B, C, D. | **11 / 11 PASSED** |
+| `tests/integration/tenant-isolation.spec.ts` | 7 | Interactive PostgreSQL transactions (`tx`) executing `SET LOCAL app.current_org_id`. Proves `FORCE ROW LEVEL SECURITY`, cross-tenant read/write blocking, missing context fail-closed, and connection pool parameter leak prevention. | **7 / 7 PASSED** |
+
+### Category 2: Real Database Authentication, Concurrency & Rollback Tests (18 tests)
+*Executed against live PostgreSQL 16 with Prisma Client and Argon2id.*
+
+| Test File | Tests | Focus Area | Verification Status |
+|---|:---:|---|:---:|
+| `tests/integration/auth.spec.ts` | 11 | Argon2id password hashing, real session generation, single-thread refresh rotation, family theft revocation, logout session cleanup. | **11 / 11 PASSED** |
+| `tests/integration/security-pass.spec.ts` (DB subset) | 7 | Real PostgreSQL `SELECT ... FOR UPDATE` concurrency testing (`Promise.allSettled` proves serialized rotation and emergency family revocation), suspended user database lifecycle, real transaction rollback on registration failure (0 orphaned records), invitation role permissions in DB. | **7 / 7 PASSED** |
+
+### Category 3: Application Guard & Security Unit Tests (24 tests)
+*Executed with mocked `ExecutionContext` testing guard algorithms, route param matching, and configuration syntax.*
+
+| Test File | Tests | Focus Area | Verification Status |
+|---|:---:|---|:---:|
+| `tests/integration/security-pass.spec.ts` (Unit subset) | 24 | Route parameter vs header IDOR mismatch rejection; `CsrfGuard` 10-test regression suite (cross-site `Sec-Fetch-Site` rejection, same-origin acceptance, same-site with/without valid origin, missing context, custom header contract, safe method exemption, Bearer token exemption); `docker-compose.yml` required variable syntax verification. | **24 / 24 PASSED** |
+
+### Category 4: Client-Side Single-Flight Refresh Concurrency Unit Tests (5 tests)
+*Executed against mocked Fetch API verifying client queueing and single-flight deduplication.*
+
+| Test File | Tests | Focus Area | Verification Status |
+|---|:---:|---|:---:|
+| `tests/unit/client-refresh.spec.ts` | 5 | Verifies that simultaneous API requests receiving 401 trigger exactly ONE call to `/api/auth/refresh`, all waiting requests retry once, failed refresh calls `authFailureHandler` without replaying consumed tokens, and login/register 401s do not trigger refresh. | **5 / 5 PASSED** |
+
+---
+
+## 4. Build, Typecheck, Lint & Migration Evidence
+
+### 1. Prisma Migration Status
+```text
+$ npx prisma migrate status
+Environment variables loaded from .env
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": PostgreSQL database "orbit_db", schema "public" at "172.28.46.91:5432"
+
+1 migration found in prisma/migrations
+Database schema is up to date!
 ```
 
-| Suite | Focus Area | Tests Passed | Status |
-|---|---|:---:|:---:|
-| `tests/integration/db-permissions.spec.ts` | PostgreSQL role separation (`orbit_app`, `orbit_migrator`, `orbit_ingress`), DDL restrictions, table grants | 11 / 11 | **PASSED** |
-| `tests/integration/tenant-isolation.spec.ts` | Multi-tenant RLS isolation, cross-tenant read/write prevention, fail-closed missing context, pool cleanup | 7 / 7 | **PASSED** |
-| `tests/integration/auth.spec.ts` | Argon2id hashing, credential verification, JWT issuance, standard token rotation & reuse detection, logout | 11 / 11 | **PASSED** |
-| `tests/integration/security-pass.spec.ts` | IDOR prevention, atomic concurrency locking, suspended user/org lifecycle, CSRF guard, registration atomicity, role RBAC | 25 / 25 | **PASSED** |
-| **TOTAL** | **Milestone 1 Full Integration Test Suite** | **54 / 54** | **100% PASS** |
+### 2. TypeScript Typecheck
+```text
+$ npm run typecheck
+> tsc --build
+(Exit code: 0, zero errors across all 9 workspaces)
+```
 
-### Static Analysis & Build Verification
-- **TypeScript (`npm run typecheck`):** Clean, 0 errors across all 9 workspaces.
-- **ESLint (`npm run lint`):** Clean, 0 errors or warnings.
-- **Production Builds (`npm run build`):** Clean production bundle generated for `@orbit/config`, `@orbit/integrations`, `@orbit/shared`, `@orbit/ui`, `@orbit/validation`, `@orbit/api`, `@orbit/web`, `@orbit/widget`, and `@orbit/worker`.
+### 3. ESLint Verification
+```text
+$ npm run lint
+> eslint .
+(Exit code: 0, zero errors, zero warnings)
+```
 
+### 4. Monorepo Production Build
+```text
+$ npm run build
+> @orbit/config@0.1.0 build -> tsc --build (PASS)
+> @orbit/integrations@0.1.0 build -> tsc --build (PASS)
+> @orbit/shared@0.1.0 build -> tsc --build (PASS)
+> @orbit/ui@0.1.0 build -> tsc --build (PASS)
+> @orbit/validation@0.1.0 build -> tsc --build (PASS)
+> @orbit/api@0.1.0 build -> tsc --build (PASS)
+> @orbit/web@0.1.0 build -> tsc && vite build (PASS - built in 10.02s)
+> @orbit/widget@0.1.0 build -> tsc --build (PASS)
+> @orbit/worker@0.1.0 build -> tsc --build (PASS)
+```
+
+---
+
+## 5. Security Limitations & Verification Boundaries
+
+Following Gravitas Invariant 6 (*Say what you cannot verify*):
+1. **Stateless Access Token Window:** Issued JWT access tokens remain structurally valid for 15 minutes unless checked against an external denylist. While `TenantGuard` checks user active status in the database on all tenant endpoints, non-tenant endpoints (like static assets or un-guarded routes) rely strictly on cryptographic signature validity.
+2. **CORS Browser-Level Enforcement:** The custom header CSRF defense (`X-Requested-With`) relies on browser Same-Origin Policy and CORS preflight enforcement. Non-browser HTTP clients (e.g. curl or Python scripts) can set arbitrary headers, but non-browser clients do not store or attach browser ambient cookies, so ambient-credential CSRF is inherently a browser-only threat model.
+3. **Standalone Ingress Deployment:** Live webhook signature verification and `apps/ingress` standalone deployment remain deferred to Milestone 2.

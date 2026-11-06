@@ -1,14 +1,14 @@
 # PROJECT ORBIT — MILESTONE 1 IMPLEMENTATION REPORT
 ## Foundation, Multi-Tenant Security, Authentication & Minimal Dashboard
 
-**Report Version:** `1.1.0`  
+**Report Version:** `1.2.0`  
 **Milestone:** `Milestone 1 — Foundation, Multi-Tenant Security, Authentication & Minimal Dashboard`  
 **Execution Date:** `2026-11-06`  
 **Architectural Contract:** `docs/ARCHITECTURE.md` v1.1.5  
 **Decisions Document:** `docs/decisions/MILESTONE_1_DECISIONS.md`  
 **Security Review Document:** `docs/MILESTONE_1_SECURITY_REVIEW.md`  
 **Governance Runtime:** `Gravitas Core Skill Mode (6 Invariants Enforced)`  
-**Implementation Verdict:** **SUCCESS — ALL GATES & INTEGRATION TESTS PASSED (54/54)**
+**Implementation Verdict:** **SUCCESS — ALL GATES & VERIFICATION SUITES PASSED (65/65 TESTS)**
 
 ---
 
@@ -178,7 +178,28 @@ $ npm run test:integration
    Duration  4.48s
 ```
 
-#### Detailed Test Coverage Breakdown:
+### 8.1 Automated Test Suites Execution (65 Tests Across 5 Suites)
+
+```bash
+$ npm test
+```
+```text
+ RUN  v2.1.9 H:/orbit-saas
+
+ ✓ tests/unit/client-refresh.spec.ts (5 tests) 26ms
+ ✓ tests/integration/db-permissions.spec.ts (11 tests) 296ms
+ ✓ tests/integration/tenant-isolation.spec.ts (7 tests) 195ms
+ ✓ tests/integration/auth.spec.ts (11 tests) 918ms
+ ✓ tests/integration/security-pass.spec.ts (31 tests) 1617ms
+
+ Test Files  5 passed (5)
+      Tests  65 passed (65)
+   Duration  4.64s
+```
+
+#### Detailed Test Taxonomy & Categorization:
+
+##### Category 1: Real Database Role & Infrastructure Tests (18 tests against real PostgreSQL 16)
 1. `tests/integration/db-permissions.spec.ts` (11 tests):
    - `orbit_app` is not superuser and has no BYPASSRLS or CREATEDB: **PASS**
    - `orbit_app` cannot execute DDL (`CREATE TABLE` throws permission denied): **PASS**
@@ -201,6 +222,7 @@ $ npm run test:integration
    - Connection pool parameter leak prevention (`SET LOCAL` discarded on commit): **PASS**
    - Omitted application WHERE filter is still completely isolated by RLS: **PASS**
 
+##### Category 2: Real Database Authentication, Concurrency & Rollback Tests (18 tests against real PostgreSQL 16)
 3. `tests/integration/auth.spec.ts` (11 tests):
    - User registration with Argon2id password hash and default organization: **PASS**
    - Duplicate registration rejected (409 Conflict): **PASS**
@@ -214,33 +236,49 @@ $ npm run test:integration
    - Organization owner can invite member with role: **PASS**
    - Non-admin member cannot invite members (403 Forbidden): **PASS**
 
-4. `tests/integration/security-pass.spec.ts` (25 tests):
+4. `tests/integration/security-pass.spec.ts` Database Subset (7 tests):
+   - Atomic refresh rotation with PostgreSQL row locking (`FOR UPDATE`): **PASS**
+   - Concurrent refresh requests: exactly one succeeds and second triggers theft family revocation: **PASS**
+   - Suspended user database status lifecycle across login, refresh, profile: **PASS**
+   - Atomic registration creates User, Org, Membership, Session in single transaction: **PASS**
+   - Registration rollback leaves zero orphaned records on failure: **PASS**
+   - Database role invitation checks (OWNER vs ADMIN authority): **PASS**
+   - Suspended organization database state fails closed: **PASS**
+
+##### Category 3: Application Guard & Security Unit Tests (24 tests with Mocked ExecutionContext)
+5. `tests/integration/security-pass.spec.ts` Guard Subset (24 tests):
    - Route-level IDOR prevention (User A blocked from Org B): **PASS**
    - Mismatched header vs route param rejected: **PASS**
    - Aligned route and verified tenant context authorized: **PASS**
    - Controller defense-in-depth param validation: **PASS**
-   - Atomic refresh rotation with PostgreSQL row locking (`FOR UPDATE`): **PASS**
-   - Concurrent refresh requests: exactly one succeeds and second triggers theft family revocation: **PASS**
-   - Suspended user prevented from login: **PASS**
-   - Suspended user prevented from refresh: **PASS**
-   - Suspended user prevented from fetching profile: **PASS**
-   - Suspended user prevented from entering tenant context in `TenantGuard`: **PASS**
-   - CSRF allowed for safe GET requests: **PASS**
-   - CSRF bypassed for non-cookie programmatic Bearer requests: **PASS**
-   - CSRF allowed for cookie requests with trusted Origin (`http://localhost:5173`): **PASS**
-   - CSRF blocked for cookie requests with unauthorized Origin (403 Forbidden): **PASS**
-   - CSRF blocked for missing Origin without custom header: **PASS**
-   - CSRF allowed when custom security header is present: **PASS**
+   - TenantGuard suspended user rejection: **PASS**
+   - TenantGuard suspended organization rejection: **PASS**
+   - CSRF Guard: blocks cookie-authenticated mutation when `Sec-Fetch-Site: cross-site`: **PASS**
+   - CSRF Guard: allows same-origin requests via `Sec-Fetch-Site: same-origin`: **PASS**
+   - CSRF Guard: allows same-site requests when Origin matches allowed origins: **PASS**
+   - CSRF Guard: blocks same-site requests when Origin is not allowed (403 Forbidden): **PASS**
+   - CSRF Guard: blocks same-site requests when Origin is missing and no custom header: **PASS**
+   - CSRF Guard: blocks mutations missing all security context: **PASS**
+   - CSRF Guard: blocks mutations with unauthorized Origin (403 Forbidden): **PASS**
+   - CSRF Guard: allows mutations with authorized Origin (`http://localhost:5173`): **PASS**
+   - CSRF Guard: allows mutations when valid custom header (`X-Requested-With`) is present: **PASS**
+   - CSRF Guard: blocks mutations when custom header is empty or blank: **PASS**
+   - CSRF Guard: allows safe GET requests with cookies: **PASS**
+   - CSRF Guard: allows non-cookie programmatic Bearer requests: **PASS**
    - Docker Compose binds PostgreSQL to 127.0.0.1: **PASS**
    - Docker Compose binds Redis to 127.0.0.1: **PASS**
-   - Docker Compose uses environment variable fallback for superuser password: **PASS**
+   - Docker Compose requires `POSTGRES_PASSWORD` with no default fallback: **PASS**
    - `.env.example` provides safe superuser template: **PASS**
-   - Atomic registration creates User, Org, Membership, Session in single transaction: **PASS**
-   - Registration rollback leaves zero orphaned records on failure: **PASS**
-   - Regular member blocked from adding members: **PASS**
-   - Admin blocked from granting OWNER role: **PASS**
-   - Admin blocked from inviting new ADMIN (owner-only): **PASS**
-   - Suspended organization fails closed in `TenantGuard`: **PASS**
+   - Role invitation boundaries (regular member cannot invite, admin cannot grant owner): **PASS**
+   - Admin cannot create another admin (owner-only): **PASS**
+
+##### Category 4: Client-Side Single-Flight Refresh Concurrency Unit Tests (5 tests)
+6. `tests/unit/client-refresh.spec.ts` (5 tests):
+   - Single call to `requestTokenRefresh` calls `/api/auth/refresh` and returns true on 200: **PASS**
+   - Concurrent calls to `requestTokenRefresh` share the exact same promise (single-flight deduplication): **PASS**
+   - Simultaneous `apiRequest` calls receiving 401 trigger exactly ONE refresh and retry successfully: **PASS**
+   - Failed refresh clears session via `authFailureHandler` without replaying consumed tokens: **PASS**
+   - Auth endpoints (`/api/auth/login`) do not trigger auto-refresh on 401: **PASS**
 
 ### 8.2 Monorepo Production Build Execution
 ```bash

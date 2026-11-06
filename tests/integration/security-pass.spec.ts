@@ -321,29 +321,95 @@ describe('Milestone 1 — Comprehensive Security Correction Suite', () => {
   });
 
   // ============================================================================
-  // Finding 4: CSRF Protection
+  // Finding 4: CSRF Protection & Sec-Fetch-Site Regression Tests
   // ============================================================================
-  describe('Finding 4: CSRF Protection for Cookie-Authenticated Requests', () => {
-    it('allows safe HTTP GET requests with cookies regardless of origin', () => {
-      const { context } = createMockExecutionContext({
-        method: 'GET',
-        cookies: { access_token: 'valid.token' },
-        headers: { origin: 'https://any-site.com' },
-      });
-
-      expect(csrfGuard.canActivate(context)).toBe(true);
-    });
-
-    it('allows non-cookie requests (e.g. Bearer token clients) on state mutations', () => {
+  describe('Finding 4: CSRF Protection & Sec-Fetch-Site Regression Suite', () => {
+    it('1. blocks cookie-authenticated mutation when Sec-Fetch-Site is cross-site even without Origin/Referer (403 Forbidden)', () => {
       const { context } = createMockExecutionContext({
         method: 'POST',
-        headers: { authorization: 'Bearer some_token' },
+        cookies: { access_token: 'valid.token' },
+        headers: { 'sec-fetch-site': 'cross-site' },
+      });
+
+      expect(() => csrfGuard.canActivate(context)).toThrow(
+        /sec-fetch-site is cross-site/i
+      );
+    });
+
+    it('2. allows same-origin requests via Sec-Fetch-Site: same-origin', () => {
+      const { context } = createMockExecutionContext({
+        method: 'POST',
+        cookies: { access_token: 'valid.token' },
+        headers: { 'sec-fetch-site': 'same-origin' },
       });
 
       expect(csrfGuard.canActivate(context)).toBe(true);
     });
 
-    it('allows cookie-authenticated state mutations with trusted Origin (http://localhost:5173)', () => {
+    it('3a. allows same-site requests when Origin matches allowed origins', () => {
+      const { context } = createMockExecutionContext({
+        method: 'POST',
+        cookies: { access_token: 'valid.token' },
+        headers: {
+          'sec-fetch-site': 'same-site',
+          origin: 'http://localhost:5173',
+        },
+      });
+
+      expect(csrfGuard.canActivate(context)).toBe(true);
+    });
+
+    it('3b. blocks same-site requests when Origin is not in allowed origins list (403 Forbidden)', () => {
+      const { context } = createMockExecutionContext({
+        method: 'POST',
+        cookies: { access_token: 'valid.token' },
+        headers: {
+          'sec-fetch-site': 'same-site',
+          origin: 'https://attacker.subdomain.com',
+        },
+      });
+
+      expect(() => csrfGuard.canActivate(context)).toThrow(
+        /origin 'https:\/\/attacker\.subdomain\.com' is not authorized/i
+      );
+    });
+
+    it('3c. blocks same-site requests when Origin is missing and no custom header is present (403 Forbidden)', () => {
+      const { context } = createMockExecutionContext({
+        method: 'POST',
+        cookies: { access_token: 'valid.token' },
+        headers: { 'sec-fetch-site': 'same-site' },
+      });
+
+      expect(() => csrfGuard.canActivate(context)).toThrow(
+        /missing security context/i
+      );
+    });
+
+    it('4. blocks cookie-authenticated mutations missing all security context (no Origin, Referer, Sec-Fetch-Site, or custom header)', () => {
+      const { context } = createMockExecutionContext({
+        method: 'POST',
+        cookies: { access_token: 'valid.token' },
+      });
+
+      expect(() => csrfGuard.canActivate(context)).toThrow(
+        /missing security context/i
+      );
+    });
+
+    it('5. blocks cookie-authenticated mutations with unauthorized Origin (403 Forbidden)', () => {
+      const { context } = createMockExecutionContext({
+        method: 'POST',
+        cookies: { access_token: 'valid.token' },
+        headers: { origin: 'https://malicious-attacker.com' },
+      });
+
+      expect(() => csrfGuard.canActivate(context)).toThrow(
+        /origin 'https:\/\/malicious-attacker\.com' is not authorized/i
+      );
+    });
+
+    it('6. allows cookie-authenticated mutations with authorized Origin (http://localhost:5173)', () => {
       const { context } = createMockExecutionContext({
         method: 'POST',
         cookies: { access_token: 'valid.token' },
@@ -353,34 +419,42 @@ describe('Milestone 1 — Comprehensive Security Correction Suite', () => {
       expect(csrfGuard.canActivate(context)).toBe(true);
     });
 
-    it('blocks cookie-authenticated state mutations from unauthorized Origin (403 Forbidden)', () => {
+    it('7a. allows cookie-authenticated mutations when Origin is absent but valid custom security header is present', () => {
       const { context } = createMockExecutionContext({
         method: 'POST',
         cookies: { access_token: 'valid.token' },
-        headers: { origin: 'https://malicious-attacker.com' },
+        headers: { 'x-requested-with': 'XMLHttpRequest' },
+      });
+
+      expect(csrfGuard.canActivate(context)).toBe(true);
+    });
+
+    it('7b. blocks cookie-authenticated mutations when custom security header is empty or blank (403 Forbidden)', () => {
+      const { context } = createMockExecutionContext({
+        method: 'POST',
+        cookies: { access_token: 'valid.token' },
+        headers: { 'x-csrf-token': '   ' },
       });
 
       expect(() => csrfGuard.canActivate(context)).toThrow(
-        /cross-site request forgery.*blocked/i
+        /missing security context/i
       );
     });
 
-    it('blocks cookie-authenticated state mutations with missing Origin/Referer and no custom header (403 Forbidden)', () => {
+    it('8. allows safe HTTP GET requests with cookies regardless of origin', () => {
       const { context } = createMockExecutionContext({
-        method: 'POST',
+        method: 'GET',
         cookies: { access_token: 'valid.token' },
+        headers: { origin: 'https://any-site.com' },
       });
 
-      expect(() => csrfGuard.canActivate(context)).toThrow(
-        /missing origin\/referer/i
-      );
+      expect(csrfGuard.canActivate(context)).toBe(true);
     });
 
-    it('allows cookie-authenticated state mutations if custom security header is present', () => {
+    it('9. allows non-cookie requests (e.g. Bearer token clients) on state mutations', () => {
       const { context } = createMockExecutionContext({
         method: 'POST',
-        cookies: { access_token: 'valid.token' },
-        headers: { 'x-csrf-token': 'token_or_requested_with' },
+        headers: { authorization: 'Bearer some_token' },
       });
 
       expect(csrfGuard.canActivate(context)).toBe(true);
@@ -397,9 +471,10 @@ describe('Milestone 1 — Comprehensive Security Correction Suite', () => {
       expect(composeContent).toContain('"127.0.0.1:6379:6379"');
     });
 
-    it('verifies docker-compose.yml does not use fixed committed superuser password without env fallback', () => {
+    it('verifies docker-compose.yml requires POSTGRES_PASSWORD environment variable with no default password fallback', () => {
       const composeContent = fs.readFileSync(path.resolve(process.cwd(), 'docker-compose.yml'), 'utf-8');
-      expect(composeContent).toContain('POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_master_dev_password}');
+      expect(composeContent).toContain('POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?');
+      expect(composeContent).not.toContain('postgres_master_dev_password');
     });
 
     it('verifies .env.example contains POSTGRES_PASSWORD template', () => {

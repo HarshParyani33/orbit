@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { AuthenticatedUser, OrganizationSummary } from '@orbit/shared';
-import { apiRequest, setActiveOrgId as setClientOrgId } from '../api/client';
+import { apiRequest, setActiveOrgId as setClientOrgId, setAuthFailureHandler } from '../api/client';
 import { LoginInput, RegisterInput } from '@orbit/validation';
 
 interface AuthContextType {
@@ -65,6 +65,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
+    setAuthFailureHandler(() => {
+      setUser(null);
+      setOrganizations([]);
+      setActiveOrg(null);
+      setClientOrgId(null);
+      localStorage.removeItem('orbit_active_org_id');
+    });
+
     refreshProfile();
   }, []);
 
