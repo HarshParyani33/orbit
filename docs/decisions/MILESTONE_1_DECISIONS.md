@@ -89,6 +89,33 @@ Diagnostic execution of `python .agents/skills/gravitas/scripts/doctor.py` confi
   - Categorized table grants applied explicitly without blanket default DML.
   - Integration tests verify RLS tenant isolation, role permission boundaries, and authentication workflows against real PostgreSQL.
 
+### Decision 7: Route Parameter & Tenant Context Invariant (IDOR Defense-in-Depth)
+- **Context:** Potential Insecure Direct Object Reference (IDOR) if route parameters (e.g. `:id` in `/api/organizations/:id`) diverge from the verified `tenantContext` or header.
+- **Decision:**
+  - In `TenantGuard`: If a route parameter specifies an organization ID (`params.id`, `params.orgId`, `params.organizationId`), it MUST match the `X-Organization-ID` header if both are supplied. A mismatch immediately throws `ForbiddenException`.
+  - In `OrganizationsController`: Handlers strictly verify `orgId === tenant.orgId` before dispatching domain queries, and domain reads use `tenant.orgId` directly.
+  - User membership and active status are verified against the route-specified tenant before the handler is invoked.
+
+### Decision 8: Atomic Refresh Token Rotation with Row Locking (FOR UPDATE)
+- **Context:** Non-atomic read-then-update in refresh token rotation allows concurrent requests with the identical refresh token to both issue new active sessions, avoiding theft detection.
+- **Decision:**
+  - `AuthService.refresh` executes inside an interactive transaction (`prisma.$transaction`) with a PostgreSQL row lock: `SELECT ... FOR UPDATE OF s`.
+  - The first request claims and marks `is_revoked = true` and issues the next token pair under the same `family_id`.
+  - Any concurrent or subsequent request presenting the same token is serialized behind the row lock, reads `is_revoked = true`, immediately triggers theft detection by revoking the entire `family_id`, commits the revocation, and throws 401 Unauthorized.
+
+### Decision 9: Cross-Site Request Forgery (CSRF) Protection
+- **Context:** Cookie-based session authentication exposes state-mutating HTTP endpoints to ambient cross-site requests if Origin headers are unchecked.
+- **Decision:**
+  - A global `CsrfGuard` intercepts all state-changing HTTP methods (`POST`, `PUT`, `PATCH`, `DELETE`).
+  - Safe methods (`GET`, `HEAD`, `OPTIONS`) and programmatic Bearer token requests (without ambient auth cookies) bypass the check.
+  - For cookie-authenticated mutations, `Origin` and `Referer` headers are validated against an allowed origin whitelist (`FRONTEND_URL`, `http://localhost:5173`, etc.). If absent, a custom security header (`X-CSRF-Token`, `X-Requested-With`) is required. Mismatched or unauthorized origins are rejected with 403 Forbidden.
+
+### Decision 10: Registration Transaction Atomicity
+- **Context:** Multi-step registration (User, Organization, Owner Membership, Session) outside a transaction risks orphaned records on downstream failures.
+- **Decision:**
+  - `AuthService.register` is wrapped in `prisma.$transaction(async (tx) => ...)`.
+  - User creation, slug reservation, organization creation, owner membership assignment, and initial session creation succeed or fail as an indivisible atomic unit. If any step fails, PostgreSQL rolls back all mutations, leaving zero orphaned records.
+
 ---
 
 ## 3. Staged Implementation Plan

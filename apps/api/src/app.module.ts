@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { PrismaService } from './prisma/prisma.service';
 import { TokenService } from './auth/token.service';
 import { AuthService } from './auth/auth.service';
 import { AuthController } from './auth/auth.controller';
 import { JwtAuthGuard } from './auth/auth.guard';
+import { CsrfGuard } from './auth/csrf.guard';
 import { TenantTransactionRunner } from './tenancy/tenant-transaction-runner';
 import { TenantGuard } from './tenancy/tenant.guard';
 import { OrganizationsService } from './organizations/organizations.service';
@@ -29,6 +31,11 @@ import { ChannelsController } from './channels/channels.controller';
     TokenService,
     AuthService,
     JwtAuthGuard,
+    CsrfGuard,
+    {
+      provide: APP_GUARD,
+      useClass: CsrfGuard,
+    },
     TenantTransactionRunner,
     TenantGuard,
     OrganizationsService,
@@ -40,6 +47,7 @@ import { ChannelsController } from './channels/channels.controller';
     AuthService,
     TenantTransactionRunner,
     TenantGuard,
+    CsrfGuard,
   ],
 })
 export class AppModule {}

@@ -10,6 +10,7 @@ Project Orbit is a modern, production-minded multi-tenant customer engagement an
 - **[System Architecture Specification (v1.1.5)](docs/ARCHITECTURE.md)**: Production architecture, PostgreSQL Row-Level Security (RLS) execution model, tenant isolation, AI grounding, and webhook outbox design.
 - **[Milestone 1 Architectural Decisions](docs/decisions/MILESTONE_1_DECISIONS.md)**: Milestone 1 baseline, scope, security boundaries, and deferrals.
 - **[Milestone 1 Implementation Report](docs/MILESTONE_1_IMPLEMENTATION_REPORT.md)**: Comprehensive implementation evidence, test results, and verification logs.
+- **[Milestone 1 Security Review](docs/MILESTONE_1_SECURITY_REVIEW.md)**: Detailed security correction report (IDOR prevention, atomic refresh locking, CSRF, suspended accounts, atomicity).
 
 ---
 

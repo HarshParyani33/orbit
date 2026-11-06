@@ -119,6 +119,14 @@ export class OrganizationsService {
       throw new ForbiddenException('Only organization owners and admins can invite new members');
     }
 
+    if ((input.role as string) === Role.OWNER) {
+      throw new ForbiddenException('The OWNER role cannot be granted through invitations');
+    }
+
+    if (currentMembership.role === 'ADMIN' && input.role === 'ADMIN') {
+      throw new ForbiddenException('Only organization owners can invite new administrators');
+    }
+
     // 2. Find target user
     const targetUser = await this.prisma.user.findUnique({
       where: { email: input.email.toLowerCase().trim() },

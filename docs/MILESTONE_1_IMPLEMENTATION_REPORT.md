@@ -1,13 +1,14 @@
 # PROJECT ORBIT — MILESTONE 1 IMPLEMENTATION REPORT
 ## Foundation, Multi-Tenant Security, Authentication & Minimal Dashboard
 
-**Report Version:** `1.0.0`  
+**Report Version:** `1.1.0`  
 **Milestone:** `Milestone 1 — Foundation, Multi-Tenant Security, Authentication & Minimal Dashboard`  
 **Execution Date:** `2026-11-06`  
 **Architectural Contract:** `docs/ARCHITECTURE.md` v1.1.5  
 **Decisions Document:** `docs/decisions/MILESTONE_1_DECISIONS.md`  
+**Security Review Document:** `docs/MILESTONE_1_SECURITY_REVIEW.md`  
 **Governance Runtime:** `Gravitas Core Skill Mode (6 Invariants Enforced)`  
-**Implementation Verdict:** **SUCCESS — ALL GATES & INTEGRATION TESTS PASSED (29/29)**
+**Implementation Verdict:** **SUCCESS — ALL GATES & INTEGRATION TESTS PASSED (54/54)**
 
 ---
 
@@ -212,6 +213,34 @@ $ npm run test:integration
    - User cannot access organization they do not belong to: **PASS**
    - Organization owner can invite member with role: **PASS**
    - Non-admin member cannot invite members (403 Forbidden): **PASS**
+
+4. `tests/integration/security-pass.spec.ts` (25 tests):
+   - Route-level IDOR prevention (User A blocked from Org B): **PASS**
+   - Mismatched header vs route param rejected: **PASS**
+   - Aligned route and verified tenant context authorized: **PASS**
+   - Controller defense-in-depth param validation: **PASS**
+   - Atomic refresh rotation with PostgreSQL row locking (`FOR UPDATE`): **PASS**
+   - Concurrent refresh requests: exactly one succeeds and second triggers theft family revocation: **PASS**
+   - Suspended user prevented from login: **PASS**
+   - Suspended user prevented from refresh: **PASS**
+   - Suspended user prevented from fetching profile: **PASS**
+   - Suspended user prevented from entering tenant context in `TenantGuard`: **PASS**
+   - CSRF allowed for safe GET requests: **PASS**
+   - CSRF bypassed for non-cookie programmatic Bearer requests: **PASS**
+   - CSRF allowed for cookie requests with trusted Origin (`http://localhost:5173`): **PASS**
+   - CSRF blocked for cookie requests with unauthorized Origin (403 Forbidden): **PASS**
+   - CSRF blocked for missing Origin without custom header: **PASS**
+   - CSRF allowed when custom security header is present: **PASS**
+   - Docker Compose binds PostgreSQL to 127.0.0.1: **PASS**
+   - Docker Compose binds Redis to 127.0.0.1: **PASS**
+   - Docker Compose uses environment variable fallback for superuser password: **PASS**
+   - `.env.example` provides safe superuser template: **PASS**
+   - Atomic registration creates User, Org, Membership, Session in single transaction: **PASS**
+   - Registration rollback leaves zero orphaned records on failure: **PASS**
+   - Regular member blocked from adding members: **PASS**
+   - Admin blocked from granting OWNER role: **PASS**
+   - Admin blocked from inviting new ADMIN (owner-only): **PASS**
+   - Suspended organization fails closed in `TenantGuard`: **PASS**
 
 ### 8.2 Monorepo Production Build Execution
 ```bash

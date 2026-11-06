@@ -4,11 +4,11 @@ services:
     container_name: orbit_postgres
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_DB: orbit_db
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres_master_dev_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_master_dev_password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init-roles.sql:/docker-entrypoint-initdb.d/01-init-roles.sql:ro
@@ -23,7 +23,7 @@ services:
     container_name: orbit_redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
