@@ -1,7 +1,7 @@
 # PROJECT ORBIT: SYSTEM ARCHITECTURE & MULTI-TENANT SPECIFICATION
 
-**Document Version:** 1.1.4 (Production Architecture Specification)  
-**Status:** Architecture Approved — Implementation Strictly Pending Explicit Authorization  
+**Document Version:** 1.1.5 (Production Architecture Specification)  
+**Status:** Architecture Approved — Ready for Milestone 1 Implementation  
 **Target Milestone:** Milestone 1 (Monorepo Foundation, PostgreSQL RLS & Authentication)  
 **Engineering Discipline:** Governed by Gravitas (6 Invariants — Core Skill Mode)
 
@@ -51,6 +51,13 @@ All operations in this codebase strictly enforce the Six Invariants:
 4. *Never exact-retry a failure:* Diagnose root cause before retrying failed steps.
 5. *Satisfy the contract:* Acceptance criteria gate completion.
 6. *Say what you can't verify:* Explicitly report limitations and mock boundaries.
+
+### 2.3 Version 1.1.5 Technical Corrections Summary
+This final specification pass addresses four verified technical findings prior to Milestone 1 authorization:
+1. **Explicit Table Grants (Finding 1):** Removed blanket `ALTER DEFAULT PRIVILEGES ... GRANT DML TO orbit_app;`. Replaced with explicit categorized grants (Category A: Tenant tables; Category B: Read-only pricing catalogs; Category C: Zero-table-access routing lookups; Category D: Application-guarded identity tables).
+2. **Ingress Process & Credential Boundary (Finding 2):** Defined isolated ingress service runtime (`apps/ingress`) holding `INGRESS_DATABASE_URL`. General API and dashboard services do not receive ingress credentials. Enforced cryptographic signature verification before database resolution.
+3. **USD-Only Provider Cost Consistency (Finding 3 - Approach A):** Enforced `CHECK (currency = 'USD')` on `ai_model_pricing_schedules` and `ai_request_attempts`, harmonizing snapshot rates, provider liabilities (`incurred_provider_cost_usd`), and usage ledgers (`billed_amount_usd`) in USD.
+4. **Outbound Side-Effect Idempotency & Safe Recovery (Finding 4):** Qualified outbound side-effects across distributed networks by provider capabilities (Tier 1: Native keys; Tier 2: Status reconciliation; Tier 3: High-risk blind retries), eliminated false "exactly-once" network claims, and introduced the `UNKNOWN_OUTCOME` quarantine and operator resolution protocol.
 
 ---
 
@@ -190,22 +197,57 @@ REVOKE CREATE ON SCHEMA public FROM orbit_app;
 REVOKE CREATE ON SCHEMA public FROM orbit_ingress;
 
 -- ============================================================================
--- 4. TABLE & SEQUENCE PERMISSIONS & DEFAULT PRIVILEGES
+-- 4. CATEGORIZED TABLE & SEQUENCE PERMISSIONS (Explicit Least-Privilege Grants)
 -- ============================================================================
--- When orbit_migrator creates tables/sequences via migrations, grant DML to orbit_app
-ALTER DEFAULT PRIVILEGES FOR ROLE orbit_migrator IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO orbit_app;
-
+-- Sequences: Runtime role requires USAGE and SELECT to consume sequences
 ALTER DEFAULT PRIVILEGES FOR ROLE orbit_migrator IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO orbit_app;
-
--- Ensure existing objects have appropriate grants for orbit_app
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO orbit_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO orbit_app;
 
 -- orbit_ingress receives ZERO direct table or sequence privileges
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM orbit_ingress;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM orbit_ingress;
+
+-- Category A: Tenant-Domain Data Tables (Governed by PostgreSQL Row-Level Security)
+-- orbit_app has full DML within tenant context; orbit_ingress has ZERO access
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
+  channels,
+  channel_credentials,
+  contacts,
+  conversations,
+  messages,
+  webhook_events,
+  ai_requests,
+  ai_request_attempts,
+  ai_reservations,
+  ai_usage_events,
+  usage_records,
+  audit_logs,
+  subscriptions
+TO orbit_app;
+
+-- Category B: System Reference Catalogs (Strictly Read-Only to Runtime Application)
+-- DML is strictly reserved for orbit_migrator; orbit_app receives SELECT only
+GRANT SELECT ON TABLE ai_model_pricing_schedules TO orbit_app;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE ai_model_pricing_schedules FROM orbit_app;
+
+-- Category C: Routing Metadata Tables (Zero Direct Table Access)
+-- Both orbit_app and orbit_ingress are denied direct table access; accessible strictly via SECURITY DEFINER functions
+REVOKE ALL ON TABLE channel_routing_lookups FROM PUBLIC, orbit_app, orbit_ingress;
+
+-- Category D: Global Identity & Membership Tables (Application-Guarded)
+-- Accessed strictly by authentication and session verification services
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
+  users,
+  user_sessions,
+  organizations,
+  organization_memberships
+TO orbit_app;
+
+-- Protocol for Future Migrations:
+-- Blanket default DML grants (ALTER DEFAULT PRIVILEGES ... GRANT DML TO orbit_app) are PROHIBITED.
+-- Every migration script executed by orbit_migrator must explicitly declare table-level GRANT
+-- statements matching that table's exact security classification (Category A, B, C, or D).
 
 -- Ensure btree_gist extension is available for temporal constraints
 CREATE EXTENSION IF NOT EXISTS btree_gist;
@@ -435,12 +477,27 @@ REVOKE ALL ON FUNCTION deregister_channel_routing(UUID) FROM PUBLIC, orbit_ingre
 GRANT EXECUTE ON FUNCTION deregister_channel_routing(UUID) TO orbit_app;
 ```
 
-### 4.5 Security Properties of the Ingress Role & Lookup Model
-1. **Isolated Role Boundary (`orbit_ingress`):** The NestJS `apps/api` application initializes a dedicated, minimal connection pool (max 5 connections) configured strictly with `orbit_ingress` credentials (`INGRESS_DATABASE_URL`). This pool is injected exclusively into `WebhookIngressService`.
-2. **Zero Global Table Exposure:** `orbit_ingress` has no `SELECT` permissions on any tables or views in the database. It cannot query `users`, `conversations`, `messages`, `contacts`, or even `channel_routing_lookups` directly.
-3. **No Probing from General Application Code:** Because `resolve_channel_routing()` is revoked from `orbit_app`, ordinary tenant services and compromised dashboard sessions cannot invoke the function to probe or enumerate foreign external account identifiers.
-4. **Signature Gating:** Webhook ingress controllers execute cryptographic signature verification over the raw body buffer BEFORE invoking `resolve_channel_routing()`. Unauthenticated requests are rejected at the edge with HTTP 401/403 and never hit the database.
-5. **Fixed `search_path` Security:** All functions enforce `SET search_path = public, pg_temp`, preventing search-path hijacking attacks common in PostgreSQL `SECURITY DEFINER` functions.
+### 4.5 Ingress Process Boundary, Credential Isolation & Security Architecture
+
+1. **Dedicated Ingress Process & Service Boundary (`apps/ingress`):**
+   - Webhook ingress runs within an isolated process boundary. In decoupled production deployments, this runs as a standalone lightweight container service (`apps/ingress` / `orbit-ingress-service`). In monolithic single-pod deployments, it executes within an encapsulated `WebhookIngressModule` possessing its own isolated database connection pool.
+2. **Strict Credential Isolation (`INGRESS_DATABASE_URL`):**
+   - The ingress service is provisioned **strictly** with `INGRESS_DATABASE_URL` (`postgresql://orbit_ingress:***@host:5432/orbit_db`, pool size: 5 connections).
+   - Core API, dashboard backend, and worker services (`apps/api`, `apps/worker`) do **not** receive `INGRESS_DATABASE_URL` in their environment variables and cannot connect under the `orbit_ingress` role.
+   - Conversely, the ingress service does **not** receive `DATABASE_URL` (`orbit_app`). It cannot connect as `orbit_app` and has zero database credentials to access tenant tables.
+3. **Zero Direct Table Access for `orbit_ingress`:**
+   - In PostgreSQL, `orbit_ingress` has **zero** table and sequence privileges (`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM orbit_ingress;`). It cannot query `users`, `conversations`, `messages`, `contacts`, or even `channel_routing_lookups` directly.
+   - It is granted execute permission **strictly** on `resolve_channel_routing(:provider, :externalAccountId)`.
+4. **Mandatory Signature Gating Before Database Lookup:**
+   - Webhook ingress controllers execute cryptographic signature verification (`X-Hub-Signature-256`, `Stripe-Signature`) over the unparsed raw request body `Buffer` **before** querying `resolve_channel_routing()`.
+   - Unauthenticated or forged webhook payloads are rejected immediately at the HTTP edge with HTTP 401/403 and **never hit the database**.
+5. **Edge Rate Limiting & DoS Protection:**
+   - Ingress endpoints are fronted by Redis token-bucket rate limiters (e.g. 100 webhook hits/second per provider endpoint) to absorb traffic spikes and volumetric attacks before database connections are utilized.
+6. **Independent Credential Rotation:**
+   - `orbit_ingress` credentials can be rotated independently in PostgreSQL and the ingress environment without recycling core application connection pools or disrupting active user sessions.
+7. **Service Ingress Handoff Topologies:**
+   - *Decoupled Ingress Service Topology (High-Scale Production):* The ingress service verifies HMAC -> resolves routing via `resolve_channel_routing` -> pushes the verified event payload `{ organizationId, channelId, provider, idempotencyKey, rawPayload }` directly to the BullMQ `ingress-webhooks` queue in Redis. The core ingestion worker (holding `DATABASE_URL` / `orbit_app`) dequeues the job and executes `TenantTransactionRunner.runWithTenant()` to persist into `webhook_events` within the transactional outbox.
+   - *Encapsulated Direct Ingress Topology (Milestone 1 / Single-Pod):* `WebhookIngressModule` uses the dedicated `orbit_ingress` pool to verify HMAC and resolve `(organization_id, channel_id)`, then immediately passes the resolved context to `WebhookOutboxService`, which executes `TenantTransactionRunner.runWithTenant()` via `orbit_app` to persist the event in PostgreSQL. In both topologies, `orbit_ingress` itself never possesses table write privileges.
 
 ### 4.6 Concrete Reference RLS Policy
 Applied to every tenant-owned table:
@@ -763,10 +820,43 @@ PostgreSQL remains the durable source of truth. Redis and BullMQ act as transien
   WHERE id = :id AND lease_token = :myWorkerLeaseToken;
   ```
   If 0 rows are updated, the worker has lost the lease (e.g. network partition or freeze) and immediately aborts execution.
-- **Handling External Side Effects (Outbound Calls):**
-  When processing involves invoking external APIs (e.g. Meta Graph API for sending messages or Stripe API for billing actions), network partitions can occur after the external API accepted the request but before the worker persisted success in PostgreSQL. To prevent duplicate external actions upon retry:
-  1. *Deterministic Client Request Tokens:* All outbound requests pass deterministic idempotency keys derived from the turn identifier (e.g. `Idempotency-Key: biz_msg_${conversation_id}_${message_id}`).
-  2. *Status Reconciliation Pre-Flight:* Before re-issuing an external side effect on retry, the worker verifies if the external action already completed (e.g., querying the message delivery or charge status).
+- **Outbound Side-Effect Idempotency by Provider Capability & Safe Operational Recovery:**
+  When worker processing involves invoking external APIs (e.g. Meta Graph API for sending messages or Stripe API for billing actions), network partitions can occur after the external API accepted the request but before the worker persisted success in PostgreSQL.
+  
+  ##### 1. Network Realities & Rejection of False "Exactly-Once" Outbound Claims
+  Over distributed networks, guaranteed physical "exactly-once" delivery across independent third-party APIs is mathematically impossible (the Two Generals' Problem). If a connection drops after transmission, no local database mechanism can guarantee whether the remote server processed the payload. Project Orbit guarantees **at-least-once internal delivery with idempotent local state transitions**, and qualifies outbound network side-effects strictly by external provider capability tiers:
+
+  ##### 2. Outbound Provider Capability Tiers
+  - **Tier 1: Native Deterministic Idempotency Keys (e.g. Stripe API, OpenAI API):**
+    - The external platform natively supports idempotency headers (`Idempotency-Key: orbit_evt_${event_id}_${action_hash}`).
+    - Retention: Stripe retains idempotency keys for 24 hours. OpenAI supports client request identifiers (`client_request_id`).
+    - Guarantee: Re-transmitting the identical payload with the identical key is safe; the provider returns the cached response without double-charging or duplicate generation.
+  - **Tier 2: Status Reconciliation & Unique External Identifiers (e.g. Meta WhatsApp Cloud API):**
+    - Meta does not support arbitrary client idempotency headers on Graph API message sends, but accepts an optional client-assigned tracking token (`biz_opaque_callback_data`) and message delivery webhook correlation.
+    - Protocol: Before issuing an outbound retry, the worker performs **Status Reconciliation Pre-Flight**: querying the channel conversation message status or checking webhook delivery logs to verify whether Meta already accepted or dispatched the message.
+  - **Tier 3: Providers Lacking Idempotency or Status Query (High Duplicate Risk):**
+    - For third-party APIs lacking both idempotency keys and queryable transaction status, blind automated retries risk severe duplicate customer messages or double billing.
+
+  ##### 3. The UNKNOWN_OUTCOME Protocol & Safe Operational Recovery
+  When an outbound API call fails ambiguously (socket hangup, HTTP 408/504 timeout, or unconfirmed 5xx server error) and outcome cannot be deterministically verified:
+  1. *Do NOT Blindly Retry:* The worker aborts automatic retries to avoid duplicating external side effects.
+  2. *Quarantine State:* The worker updates PostgreSQL:
+     ```sql
+     UPDATE webhook_events
+     SET processing_status = 'UNKNOWN_OUTCOME',
+         lease_token = NULL,
+         lease_expires_at = NULL,
+         next_retry_at = NULL,
+         last_error = 'PROVIDER_TIMEOUT_UNCONFIRMED: ' || :errorMessage,
+         updated_at = NOW()
+     WHERE id = :id AND lease_token = :myWorkerLeaseToken;
+     ```
+  3. *Dispatch Operational Alert:* Publishes an urgent alert to Redis Pub/Sub (`orbit:alerts:side-effects`).
+  4. *Automated Reconciliation Polling:* A background reconciliation worker periodically queries provider reporting endpoints or waits up to 15 minutes for delayed webhook callbacks.
+  5. *Operator Resolution Console:* If unverified after 15 minutes, the incident escalates to the internal operational console:
+     - `Mark Succeeded`: Operator inspects the provider portal (e.g., Meta WhatsApp Manager, Stripe Dashboard), confirms execution, and marks the event `PROCESSED`.
+     - `Force Re-issue`: Operator confirms the payload never reached the provider and triggers a manual, logged re-dispatch.
+     - `Abort`: Operator cancels the action, marks `FAILED`, releases token reservations, and creates an agent escalation task.
 - **Fenced Conditional Completion:**
   ```sql
   UPDATE webhook_events
@@ -897,6 +987,7 @@ CREATE TABLE ai_model_pricing_schedules (
   effective_from TIMESTAMPTZ NOT NULL,
   effective_to TIMESTAMPTZ,                 -- NULL indicates currently active schedule
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_pricing_currency_usd CHECK (currency = 'USD'),
   CONSTRAINT uq_pricing_provider_model_version UNIQUE (provider, canonical_model, pricing_version),
   CONSTRAINT ex_pricing_no_overlap EXCLUDE USING gist (
     provider WITH =,
@@ -927,17 +1018,18 @@ CREATE TABLE ai_request_attempts (
   completion_tokens INT,
   total_tokens INT,
   
-  -- Frozen Rate Snapshot (NO HARDCODED SCHEMA DEFAULTS)
+  -- Frozen Rate Snapshot (Strictly USD-Denominated)
   pricing_version VARCHAR(32) NOT NULL,     -- Applied schedule version (e.g. '2024-07-18-v1')
-  prompt_rate_per_m DECIMAL(10, 6) NOT NULL,     -- Snapshot rate active at attempt time
-  completion_rate_per_m DECIMAL(10, 6) NOT NULL, -- Snapshot rate active at attempt time
-  cost_currency VARCHAR(8) NOT NULL,             -- Persisted strictly from matching schedule's currency
-  incurred_provider_cost_usd DECIMAL(10, 6),     -- Platform COGS liability (NULL until calculated)
+  prompt_rate_per_m DECIMAL(10, 6) NOT NULL,     -- Snapshot rate active at attempt time (USD per 1M tokens)
+  completion_rate_per_m DECIMAL(10, 6) NOT NULL, -- Snapshot rate active at attempt time (USD per 1M tokens)
+  cost_currency VARCHAR(8) NOT NULL DEFAULT 'USD', -- Persisted strictly from matching schedule's currency
+  incurred_provider_cost_usd DECIMAL(10, 6),     -- Platform COGS liability in USD (NULL until calculated)
   cost_reconciliation_status VARCHAR(32) NOT NULL DEFAULT 'PENDING', -- 'PENDING', 'KNOWN', 'ESTIMATED', 'UNKNOWN', 'RECONCILED'
   is_tenant_billable BOOLEAN NOT NULL DEFAULT false,
   error_message TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   
+  CONSTRAINT chk_attempt_currency_usd CHECK (cost_currency = 'USD'),
   CONSTRAINT fk_attempts_request_org FOREIGN KEY (request_id, organization_id)
     REFERENCES ai_requests (id, organization_id) ON DELETE RESTRICT,
   CONSTRAINT uq_ai_attempts_request_attempt UNIQUE (request_id, attempt_number)
@@ -992,6 +1084,13 @@ Hardcoded default pricing strings in schemas or code risk silently assigning obs
    $$\text{Cost} = \left(\text{prompt\_tokens} \times \frac{\text{prompt\_token\_rate\_per\_m}}{1\,000\,000}\right) + \left(\text{completion\_tokens} \times \frac{\text{completion\_token\_rate\_per\_m}}{1\,000\,000}\right)$$
    Values are stored with 6 decimal places (`DECIMAL(10, 6)`), ensuring exact fractional-cent accuracy.
 4. **Immutable Snapshot on Every Attempt:** The selected rates are recorded in `ai_request_attempts`. When a provider changes prices, an administrator inserts a new schedule with a new `effective_from` date and sets `effective_to` on the prior version. Past attempts remain completely reproducible because they link to frozen snapshot rates.
+5. **Provider Pricing Currency Alignment: Approach A (USD-Only Architecture):**
+   Project Orbit adopts **Approach A (USD-Only Provider Pricing Schedules)** for initial production:
+   - *Upstream Vendor Alignment:* Upstream foundation model providers (OpenAI, Anthropic) price and invoice API consumption exclusively in US Dollars (USD).
+   - *Elimination of FX Rounding & Audit Drift:* Permitting arbitrary currencies in pricing schedules prior to multi-currency billing introduces foreign exchange (FX) conversion discrepancies, temporal exchange rate lookups, and audit drift in statutory COGS ledgers.
+   - *Database-Level Guardrails:* `CONSTRAINT chk_pricing_currency_usd CHECK (currency = 'USD')` on `ai_model_pricing_schedules` and `CONSTRAINT chk_attempt_currency_usd CHECK (cost_currency = 'USD')` on `ai_request_attempts` guarantee that non-USD rates cannot be entered accidentally.
+   - *End-to-End Currency Consistency:* All rate tables (`prompt_token_rate_per_m`, `completion_token_rate_per_m`), attempt snapshots (`prompt_rate_per_m`, `completion_rate_per_m`), COGS liabilities (`incurred_provider_cost_usd`), and retail usage events (`billed_amount_usd`) operate with exact decimal precision in USD (`DECIMAL(10, 6)`).
+   - *Future Multi-Currency Roadmap:* If non-USD regional AI providers are introduced in future milestones, a dedicated historical exchange rate ledger (`currency_exchange_rates`) and versioned conversion pipeline will be introduced via a formal migration.
 
 ### 8.4 Separation of Platform COGS vs. Tenant Billing
 Platform cost accounting and customer retail billing represent separate financial ledgers and must never be conflated:
@@ -1074,11 +1173,14 @@ Unit tests and mocks cannot prove RLS correctness. Real integration tests must e
 6. **Connection Pool Leak Prevention:** Verifies that when a connection is returned to the pool after `COMMIT` or `ROLLBACK`, subsequent queries on that pooled connection without a new tenant context return 0 rows (no leaked session parameters across requests).
 7. **Dynamic Tenant Switching:** Verifies that switching tenants requires a new transaction and that no residual visibility from Tenant A persists when executing as Tenant B.
 8. **Runtime Role Restrictions:** Verifies that tests execute strictly under the `orbit_app` role (`NOSUPERUSER, NOBYPASSRLS`). Direct bypass attempts via raw SQL return 0 rows.
-9. **Ingress Role & Security Definer Restrictions:**
+9. **Role Privilege Boundaries & Security Definer Restrictions:**
    - Verifies that `orbit_ingress` role CANNOT execute `SELECT`, `INSERT`, `UPDATE`, or `DELETE` on any database table (throws permission denied error).
    - Verifies that `orbit_ingress` CAN execute `resolve_channel_routing()`.
    - Verifies that `orbit_app` CANNOT execute `resolve_channel_routing()` (throws permission denied error).
+   - Verifies that `orbit_app` CANNOT execute `INSERT`, `UPDATE`, `DELETE`, or `TRUNCATE` on `ai_model_pricing_schedules` (throws permission denied error; read-only `SELECT` permitted).
+   - Verifies that `orbit_app` and `orbit_ingress` CANNOT directly query `channel_routing_lookups` (throws permission denied error).
    - Verifies that `register_channel_routing()` fails if the referenced channel is soft-deleted, inactive, belongs to another organization, or specifies a mismatched provider.
+   - Verifies that `ai_model_pricing_schedules` and `ai_request_attempts` reject non-USD currencies with `CHECK` constraint violations.
 
 > [!NOTE]
 > **Verification Status:** Static relational schema integrity, composite foreign key consistency, role permissions, and state transition contracts have been verified via static schema validation scripts and Gravitas discipline. Live PostgreSQL execution tests remain conceptual at this planning phase and will be executed when Milestone 1 implementation is authorized.
@@ -1131,7 +1233,7 @@ orbit-saas/
 Milestone 1 remains strictly locked to foundational infrastructure:
 1. **Monorepo Foundation:** Modern npm workspaces (`apps/web`, `apps/api`, `packages/shared`, `packages/validation`, `packages/config`).
 2. **Docker Compose:** PostgreSQL 16 (`pgvector`) + Redis 7 Alpine.
-3. **Database Roles & Migrations:** `orbit_migrator` (DDL, `NOSUPERUSER, BYPASSRLS`), `orbit_app` (`NOSUPERUSER, NOBYPASSRLS`), and `orbit_ingress` (`NOSUPERUSER, NOBYPASSRLS, ZERO Table Access`). Core entities: `User`, `Organization`, `OrganizationMembership`, `UserSession`, `channels`, `channel_routing_lookups`, `ai_model_pricing_schedules`.
+3. **Database Roles, Migrations & Categorized Permissions:** `orbit_migrator` (DDL, `NOSUPERUSER, BYPASSRLS`), `orbit_app` (`NOSUPERUSER, NOBYPASSRLS`), and `orbit_ingress` (`NOSUPERUSER, NOBYPASSRLS, ZERO Table Access`). Core entities: `User`, `Organization`, `OrganizationMembership`, `UserSession`, `channels`, `channel_routing_lookups`, `ai_model_pricing_schedules`. Explicit categorized table permissions eliminating blanket default DML. Isolated ingress connection pool configuration (`INGRESS_DATABASE_URL`). USD-only provider pricing constraint (`CHECK (currency = 'USD')`).
 4. **TenantTransactionRunner:** Implementation of transactional `SET LOCAL` runner with composite foreign keys and RLS policies.
 5. **Authentication & Sessions:** User registration, login with Argon2id, HTTP-only JWT cookies, refresh token rotation with theft reuse detection, and session revocation.
 6. **Unified TenantContext & Authorization:** `TenantGuard` verifying active membership before creating trusted `TenantContext`.
