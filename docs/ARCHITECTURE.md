@@ -1,6 +1,6 @@
 # PROJECT ORBIT: SYSTEM ARCHITECTURE & MULTI-TENANT SPECIFICATION
 
-**Document Version:** 1.1.2 (Production Architecture Specification)  
+**Document Version:** 1.1.3 (Production Architecture Specification)  
 **Status:** Architecture Approved — Implementation Strictly Pending Explicit Authorization  
 **Target Milestone:** Milestone 1 (Monorepo Foundation, PostgreSQL RLS & Authentication)  
 **Engineering Discipline:** Governed by Gravitas (6 Invariants — Core Skill Mode)
@@ -23,7 +23,7 @@ Project Orbit is a multi-tenant AI customer engagement SaaS built for small-to-m
 
 Gravitas is installed in the workspace as our engineering reliability runtime.
 
-### 2.1 Diagnostic Status & Checksum Explanation
+### 2.1 Diagnostic Status & Operating Mode
 Diagnostic script executed at `python .agents/skills/gravitas/scripts/doctor.py`:
 ```json
 {
@@ -38,19 +38,19 @@ Diagnostic script executed at `python .agents/skills/gravitas/scripts/doctor.py`
 }
 ```
 
-**Clarification of Checksums:**
+**Clarification of Capabilities & Checksums:**
 - `skills-lock.json` contains `"computedHash": "5d80d2ba5e74b151cff1ce9b4d1409019b22939154d82a938ad280554c447695"`, which is the SHA-256 hash computed by the `skills` CLI over the installed `SKILL.md` content at installation time.
 - `doctor.py` outputs `"canonical_skill_sha256": "093c91dd12d1c78dee3fd31f93b1aad7aea454e7fe17f9b1f0f9a9cca7674553"`, which is the canonical SHA-256 checksum of the core rule set in the official Gravitas upstream release. Both are verified and authentic.
+- **Genuine Available Operating Mode:** **Core Skill Mode** (prompt-based behavioral discipline, decision records, evidence-backed verification). Automated native hook interception is NOT available because the Antigravity CLI and native plugin hooks are not installed. Invariant enforcement is executed directly through behavioral discipline and verified commands.
 
-### 2.2 Operational Mode
-- **Mode:** **Core Skill Mode** (prompt-based behavioral discipline, decision records, evidence-backed verification).
-- **The Six Invariants Enforced:**
-  1. *Ground before mutating:* Inspect file state, tests, and callers before editing.
-  2. *Stay in declared scope:* Confine modifications strictly to task boundaries.
-  3. *Completion needs evidence:* No task is complete without executed command proof.
-  4. *Never exact-retry a failure:* Diagnose root cause before retrying failed steps.
-  5. *Satisfy the contract:* Acceptance criteria gate completion.
-  6. *Say what you can't verify:* Explicitly report limitations and mock boundaries.
+### 2.2 Mandatory Execution Invariants
+All operations in this codebase strictly enforce the Six Invariants:
+1. *Ground before mutating:* Inspect file state, tests, and callers before editing. Never act on assumed state.
+2. *Stay in declared scope:* Confine modifications strictly to task boundaries.
+3. *Completion needs evidence:* No task is complete without executed command proof.
+4. *Never exact-retry a failure:* Diagnose root cause before retrying failed steps.
+5. *Satisfy the contract:* Acceptance criteria gate completion.
+6. *Say what you can't verify:* Explicitly report limitations and mock boundaries.
 
 ---
 
@@ -68,7 +68,7 @@ flowchart TD
         DashAuth["Dashboard Auth: JWT Cookie (sub: userId)"]
         WidgetAuth["Visitor Capability Guard: WIDGET_SECRET + Origin + Rate Limit"]
         WebhookAuth["Webhook Guard: Meta App Secret / Stripe Endpoint Secret (Raw Body HMAC)"]
-        RoutingLookup["Channel Routing Lookup Table\n(Dedicated Non-RLS Metadata Table: channel_routing_lookups)"]
+        RoutingSecurityDefiner["resolve_channel_routing(provider, external_id)\n(SECURITY DEFINER Function — NO Direct Table Access for orbit_app)"]
     end
 
     subgraph TenantResolution["Trusted TenantContext Derivation"]
@@ -79,7 +79,8 @@ flowchart TD
 
     subgraph OutboxDispatcher["Webhook Outbox & Dispatch Engine"]
         OutboxTable["Transactional Outbox (webhook_events)\ndispatch_status: PENDING_DISPATCH"]
-        DispatchSweeper["Dispatch Sweeper\n(FOR UPDATE SKIP LOCKED + BullMQ Job ID = event.id)"]
+        ImmediateDispatch["Immediate HTTP Handler Dispatch\n(Claims dispatch_token -> Adds to BullMQ)"]
+        DispatchSweeper["Background Dispatch Sweeper\n(FOR UPDATE SKIP LOCKED + BullMQ Job ID = event.id)"]
         BullMQQueue[("BullMQ Redis Queue: webhooks")]
     end
 
@@ -102,8 +103,9 @@ flowchart TD
     VerifyMembership -->|Invalid / Missing| Deny403["403 Forbidden"]
 
     ChatWidget --> WidgetAuth --> MakeTenantContext
-    Webhooks --> WebhookAuth --> RoutingLookup --> MakeTenantContext
+    Webhooks --> WebhookAuth --> RoutingSecurityDefiner --> MakeTenantContext
     MakeTenantContext --> OutboxTable
+    OutboxTable --> ImmediateDispatch --> BullMQQueue
     OutboxTable --> DispatchSweeper --> BullMQQueue
 
     MakeTenantContext --> NestServices
@@ -186,32 +188,211 @@ ALTER DEFAULT PRIVILEGES FOR ROLE orbit_migrator IN SCHEMA public
 -- Ensure existing objects have appropriate grants
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO orbit_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO orbit_app;
+```
 
+### 4.4 Narrow Routing Lookup Table & SECURITY DEFINER Control
+To completely prevent normal application code or compromised tenant queries from enumerating, reading, or tampering with routing mappings across organizations:
+
+1. `channel_routing_lookups` is owned by `orbit_migrator`.
+2. Direct access on `channel_routing_lookups` is **strictly revoked from `orbit_app`**.
+3. All reads and writes must pass through explicit `SECURITY DEFINER` functions with fixed `search_path = public, pg_temp`.
+
+```sql
 -- ============================================================================
--- 5. WEBHOOK ROUTING METADATA TABLE (Non-RLS Ingress Resolution)
+-- 5. CHANNEL ROUTING METADATA SCHEMA & ACCESS CONTROL
 -- ============================================================================
--- Dedicated table containing solely ingress resolution pointers.
--- Contains ZERO customer messages, ZERO customer contacts, and ZERO secret keys.
+
+-- Channels Table declaration including composite unique constraint
+CREATE TABLE channels (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
+  provider VARCHAR(32) NOT NULL,          -- 'META_WHATSAPP', 'META_INSTAGRAM', 'WEB_CHAT'
+  name VARCHAR(64) NOT NULL,
+  status VARCHAR(24) NOT NULL DEFAULT 'ACTIVE', -- 'ACTIVE', 'INACTIVE'
+  config JSONB NOT NULL DEFAULT '{}',
+  deleted_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_channels_id_org UNIQUE (id, organization_id)
+);
+
+-- Routing Metadata Table
 CREATE TABLE channel_routing_lookups (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   provider VARCHAR(32) NOT NULL,          -- 'META_WHATSAPP', 'META_INSTAGRAM', 'STRIPE'
   external_account_id VARCHAR(128) NOT NULL, -- e.g. Phone Number ID, IG Account ID, Stripe Account ID
   channel_id UUID NOT NULL,
-  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  organization_id UUID NOT NULL,
   status VARCHAR(24) NOT NULL DEFAULT 'ACTIVE', -- 'ACTIVE', 'INACTIVE'
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT uq_channel_routing_provider_ext UNIQUE (provider, external_account_id)
+  
+  -- Uniqueness Scope: An external identifier can belong to at most ONE organization
+  CONSTRAINT uq_channel_routing_provider_ext UNIQUE (provider, external_account_id),
+  
+  -- Relational Integrity: Tying channel strictly to the same organization
+  CONSTRAINT fk_routing_channel_org FOREIGN KEY (channel_id, organization_id)
+    REFERENCES channels (id, organization_id) ON DELETE CASCADE,
+  CONSTRAINT fk_routing_org FOREIGN KEY (organization_id)
+    REFERENCES organizations (id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_channel_routing_provider_ext 
-  ON channel_routing_lookups(provider, external_account_id);
+-- Composite Index for tenant cleanup, joins, and soft-delete synchronization
+-- (uq_channel_routing_provider_ext already indexes provider + external_account_id)
+CREATE INDEX idx_channel_routing_org_channel 
+  ON channel_routing_lookups(organization_id, channel_id);
 
--- Explicitly grant DML to orbit_app for channel registration and ingress lookups
-GRANT SELECT, INSERT, UPDATE, DELETE ON channel_routing_lookups TO orbit_app;
+-- REVOKE DIRECT ACCESS: orbit_app CANNOT directly SELECT, INSERT, UPDATE, or DELETE
+REVOKE ALL ON TABLE channel_routing_lookups FROM PUBLIC, orbit_app;
+
+-- ============================================================================
+-- 6. SECURITY DEFINER ROUTING FUNCTIONS
+-- ============================================================================
+
+-- Function 1: Webhook Ingress Lookup (Unauthenticated Pre-Tenant Resolution)
+-- Exposes ONLY the minimum 3 routing fields. Prevents table enumeration.
+CREATE OR REPLACE FUNCTION resolve_channel_routing(
+  p_provider VARCHAR,
+  p_external_account_id VARCHAR
+)
+RETURNS TABLE (
+  channel_id UUID,
+  organization_id UUID,
+  status VARCHAR
+)
+LANGUAGE plpgsql
+STRICT
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF p_provider IS NULL OR p_external_account_id IS NULL OR
+     length(trim(p_provider)) = 0 OR length(trim(p_external_account_id)) = 0 THEN
+    RETURN;
+  END IF;
+
+  RETURN QUERY
+  SELECT c.channel_id, c.organization_id, c.status
+  FROM channel_routing_lookups c
+  WHERE c.provider = p_provider
+    AND c.external_account_id = p_external_account_id
+    AND c.status = 'ACTIVE'
+  LIMIT 1;
+END;
+$$;
+
+ALTER FUNCTION resolve_channel_routing(VARCHAR, VARCHAR) OWNER TO orbit_migrator;
+REVOKE ALL ON FUNCTION resolve_channel_routing(VARCHAR, VARCHAR) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION resolve_channel_routing(VARCHAR, VARCHAR) TO orbit_app;
+
+-- Function 2: Authorized Channel Routing Registration (Tenant-Bounded)
+-- Verifies that app.current_org_id matches the channel before inserting.
+CREATE OR REPLACE FUNCTION register_channel_routing(
+  p_channel_id UUID,
+  p_provider VARCHAR,
+  p_external_account_id VARCHAR
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STRICT
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_current_org UUID;
+  v_channel_valid BOOLEAN;
+BEGIN
+  v_current_org := NULLIF(current_setting('app.current_org_id', true), '')::UUID;
+  IF v_current_org IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized: tenant context app.current_org_id is not set'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  -- Ensure channel belongs strictly to the authenticated tenant
+  SELECT EXISTS(
+    SELECT 1 FROM channels
+    WHERE id = p_channel_id AND organization_id = v_current_org AND deleted_at IS NULL
+  ) INTO v_channel_valid;
+
+  IF NOT v_channel_valid THEN
+    RAISE EXCEPTION 'Unauthorized: channel does not belong to active organization'
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
+  -- Atomic upsert: cannot claim an external account belonging to another tenant
+  INSERT INTO channel_routing_lookups (
+    channel_id,
+    organization_id,
+    provider,
+    external_account_id,
+    status,
+    updated_at
+  )
+  VALUES (
+    p_channel_id,
+    v_current_org,
+    p_provider,
+    p_external_account_id,
+    'ACTIVE',
+    NOW()
+  )
+  ON CONFLICT (provider, external_account_id)
+  DO UPDATE SET
+    channel_id = EXCLUDED.channel_id,
+    status = 'ACTIVE',
+    updated_at = NOW()
+  WHERE channel_routing_lookups.organization_id = v_current_org;
+
+  IF NOT FOUND AND EXISTS (
+    SELECT 1 FROM channel_routing_lookups 
+    WHERE provider = p_provider AND external_account_id = p_external_account_id
+  ) THEN
+    RAISE EXCEPTION 'Conflict: external account identifier is already registered by another organization'
+      USING ERRCODE = 'unique_violation';
+  END IF;
+END;
+$$;
+
+ALTER FUNCTION register_channel_routing(UUID, VARCHAR, VARCHAR) OWNER TO orbit_migrator;
+REVOKE ALL ON FUNCTION register_channel_routing(UUID, VARCHAR, VARCHAR) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION register_channel_routing(UUID, VARCHAR, VARCHAR) TO orbit_app;
+
+-- Function 3: Authorized Channel Routing Deregistration (Tenant-Bounded)
+CREATE OR REPLACE FUNCTION deregister_channel_routing(
+  p_channel_id UUID
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STRICT
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_current_org UUID;
+BEGIN
+  v_current_org := NULLIF(current_setting('app.current_org_id', true), '')::UUID;
+  IF v_current_org IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized: tenant context app.current_org_id is not set'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  DELETE FROM channel_routing_lookups
+  WHERE channel_id = p_channel_id AND organization_id = v_current_org;
+END;
+$$;
+
+ALTER FUNCTION deregister_channel_routing(UUID) OWNER TO orbit_migrator;
+REVOKE ALL ON FUNCTION deregister_channel_routing(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION deregister_channel_routing(UUID) TO orbit_app;
 ```
 
-### 4.4 Concrete Reference RLS Policy
+### 4.5 Why This Permission Model is Substantially Safer
+1. **No Wildcard Table Enumeration:** `orbit_app` cannot issue `SELECT * FROM channel_routing_lookups;`. An attacker with compromised credentials cannot harvest foreign phone numbers, Instagram IDs, or list competitor organizations.
+2. **Preventing Cross-Tenant Hijacking:** Writing routing rows directly via table grants would allow a malicious or buggy query to rewrite another organization's `channel_id`. The `register_channel_routing` function enforces that `current_setting('app.current_org_id')` owns the channel and rejects overwrites of another organization's registered external account.
+3. **Fixed `search_path` Security:** All functions enforce `SET search_path = public, pg_temp`, preventing search-path hijacking attacks common in PostgreSQL `SECURITY DEFINER` functions.
+4. **Minimal Field Surface:** Only the 3 necessary routing attributes (`channel_id`, `organization_id`, `status`) are returned. Zero secrets or customer messages exist in this table.
+
+### 4.6 Concrete Reference RLS Policy
 Applied to every tenant-owned table:
 ```sql
 ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
@@ -236,7 +417,7 @@ sequenceDiagram
     autonumber
     actor Client as Ingress (Dashboard / Widget / Webhook / Worker)
     participant Gateway as Ingress Guard & Validator
-    participant Lookup as channel_routing_lookups Table
+    participant Func as resolve_channel_routing() [SECURITY DEFINER]
     participant DB as PostgreSQL / Redis Cache
     participant Service as Application Domain Service
     participant Runner as TenantTransactionRunner
@@ -252,9 +433,9 @@ sequenceDiagram
     else Webhook Ingestion
         Client->>Gateway: POST /api/webhooks/whatsapp (Payload, X-Hub-Signature-256)
         Gateway->>Gateway: Verify raw body HMAC-SHA256 using META_APP_SECRET
-        Gateway->>Lookup: SELECT channel_id, organization_id, status FROM channel_routing_lookups WHERE provider = :provider AND external_account_id = :phoneId
-        Note over Lookup: Isolated routing metadata query<br/>(NO general RLS bypass, NO access to customer data)
-        Lookup-->>Gateway: Routing Record { channelId, orgId, status: 'ACTIVE' }
+        Gateway->>Func: SELECT channel_id, organization_id, status FROM resolve_channel_routing(:provider, :phoneId)
+        Note over Func: Executes with orbit_migrator privileges.<br/>Validates inputs, returns only 3 routing fields.<br/>(NO general table access, NO customer data)
+        Func-->>Gateway: Routing Record { channelId, orgId, status: 'ACTIVE' }
         Gateway->>Gateway: Construct TenantContext { systemWebhook, orgId, channelId }
     else Background Worker Job
         Client->>Gateway: BullMQ Worker dequeues job { organizationId, eventId }
@@ -276,15 +457,14 @@ sequenceDiagram
    - Request `Origin` matches `channels.config.allowed_domains`.
    - Token is restricted strictly to `/api/widget/*`. Any attempt to call dashboard routes returns 403.
    - Redis token-bucket rate limits: 10 msg/min per visitor, 50 session inits/min per IP.
-3. **Webhook Ingress & Dedicated Routing Metadata Table:**
+3. **Webhook Ingress & Narrow Routing Lookup:**
    - Inbound webhook verifies signature via provider-specific verification adapter using the system-level platform secret (e.g. `META_APP_SECRET` or Stripe Webhook Endpoint Secret).
-   - Inbound payload has no JWT or tenant header. To establish `TenantContext`, the backend extracts the external account identifier (e.g. Meta `phone_number_id` or Stripe account ID) and queries the dedicated `channel_routing_lookups` table:
+   - Inbound payload has no JWT or tenant header. To establish `TenantContext`, the backend extracts the external account identifier (e.g. Meta `phone_number_id` or Stripe account ID) and calls the `resolve_channel_routing` function:
      ```sql
      SELECT channel_id, organization_id, status
-     FROM channel_routing_lookups
-     WHERE provider = :provider AND external_account_id = :externalAccountId;
+     FROM resolve_channel_routing(:provider, :externalAccountId);
      ```
-   - **Narrow Scope Guarantee:** This lookup table contains solely routing identifiers. It is **completely isolated from customer data** (no messages, contacts, conversations, or credentials). If no record is found or status is not `ACTIVE`, the request is rejected immediately with 404/400.
+   - **Narrow Scope Guarantee:** Direct table queries on `channel_routing_lookups` are revoked from `orbit_app`. If no record is found or status is not `ACTIVE`, the request is rejected immediately with 404/400.
    - Once `organization_id` is resolved, the webhook event is inserted into `webhook_events` within that tenant's transaction via `TenantTransactionRunner.runWithTenant(organizationId, ...)`.
 4. **Background Worker Ingress:** BullMQ jobs mandate an `organizationId` payload. Workers instantiate `TenantTransactionRunner.runWithTenant(job.data.organizationId, fn(tx))` before executing any domain logic.
 
@@ -300,7 +480,7 @@ sequenceDiagram
 | `user_sessions` | **Global** | `userId` Foreign Key | 30 Days | Refresh token sessions with rotation. Purged after revocation or expiry. |
 | `organizations` | **Global / Root** | Membership Verification | Indefinite / Soft-Delete | Root tenant container. Read/write governed by verified membership role. |
 | `organization_memberships` | **Global / Pivot** | `(userId, organizationId)` Unique | Active + 30 Days Audit | Bridges global users to tenant workspaces. Only visible to workspace members. |
-| `channel_routing_lookups` | **Global / Routing** | Non-RLS Routing Metadata | Lifetime of Channel | Minimal routing table mapping external IDs to channels. Zero customer PII. |
+| `channel_routing_lookups` | **Global / Routing** | SECURITY DEFINER Functions | Lifetime of Channel | Minimal routing table mapping external IDs to channels. Zero direct table access. Zero customer PII. |
 | `channels` | **Tenant-Owned** | RLS + Composite FK | Indefinite / Soft-Delete | Communication endpoints. `ON DELETE RESTRICT`. |
 | `channel_credentials` | **Tenant-Owned** | RLS + Composite FK | Lifetime of Channel | AES-256-GCM encrypted API keys per channel. Purged on channel removal. |
 | `contacts` | **Tenant-Owned** | RLS + Composite FK | Active Customer Lifetime | CRM customer profiles isolated per tenant. Purged after grace period. |
@@ -308,6 +488,7 @@ sequenceDiagram
 | `messages` | **Tenant-Owned** | RLS + Composite FK | Active Customer Lifetime | Customer and agent message history. Anonymized on organization deletion. |
 | `webhook_events` | **Tenant-Owned** | RLS + Composite FK + Outbox | 30 Days Payload / 90 Days Metadata | Raw customer webhooks. Payloads wiped after 30 days. `ON DELETE RESTRICT`. |
 | `ai_requests` | **Tenant-Owned** | RLS + Composite FK | 7 Years (Financial Audit) | Logical customer AI turns. `ON DELETE RESTRICT`. |
+| `ai_model_pricing_schedules` | **Global / System** | Read-Only Catalog | Indefinite (Versioned) | Historical model pricing rate table. Read-only for `orbit_app`. |
 | `ai_request_attempts` | **Tenant-Owned** | RLS + Composite FK | 7 Years (Financial Audit) | Physical provider attempts and platform COGS liabilities. `ON DELETE RESTRICT`. |
 | `ai_reservations` | **Tenant-Owned** | RLS + Composite FK | 30 Days (Operational) | Durable token quota reservation ledger. `ON DELETE CASCADE`. |
 | `ai_usage_events` | **Tenant-Owned** | RLS + Composite FK | 7 Years (Statutory Tax) | Customer-billable ledger events. `ON DELETE RESTRICT`. |
@@ -320,7 +501,10 @@ To resolve the conflict between foreign key cascading and statutory audit retent
 - **Normal Organization Deletion is Soft Deletion:** `organizations` includes `deleted_at TIMESTAMPTZ NULL` and `status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE'` (`ACTIVE`, `SUSPENDED`, `PENDING_DELETION`, `DELETED`).
 - When a Business Owner requests organization deletion:
   1. Status transitions to `PENDING_DELETION`, setting `deleted_at = NOW()`.
-  2. Active channels, webhooks, routing lookups, and AI response engines are disabled immediately.
+  2. Active channels, webhooks, routing lookups, and AI response engines are disabled immediately:
+     ```sql
+     UPDATE channel_routing_lookups SET status = 'INACTIVE', updated_at = NOW() WHERE organization_id = :orgId;
+     ```
   3. A 30-day grace period is observed before permanent data anonymization.
 - **Audit & Financial Record Retention (`ON DELETE RESTRICT`):**
   - `audit_logs`: Retained for 365 days. Governed by `ON DELETE RESTRICT`.
@@ -405,14 +589,14 @@ CREATE INDEX idx_webhook_processing_sweeper
   WHERE processing_status IN ('UNCLAIMED', 'PROCESSING');
 ```
 
-### 7.4 Outbox Lifecycle: Separation of Dispatch vs. Processing
+### 7.4 Outbox Dispatch & Processing Lifecycle
 
 ```mermaid
 stateDiagram-v2
     [*] --> PENDING_DISPATCH: Webhook Ingress (Atomic Insert)
     
     state DispatchLifecycle {
-        PENDING_DISPATCH --> PENDING_DISPATCH: Dispatch Sweeper claims with dispatch_token
+        PENDING_DISPATCH --> PENDING_DISPATCH: Immediate HTTP Handler / Sweeper claims dispatch_token
         PENDING_DISPATCH --> DISPATCHED: BullMQ enqueue succeeds (Job ID = event.id)
         DISPATCHED --> PENDING_DISPATCH: Stale Dispatched Sweeper resets if UNCLAIMED > 15m
     }
@@ -431,11 +615,50 @@ stateDiagram-v2
     DISPATCHED --> UNCLAIMED: BullMQ Worker picks up job
 ```
 
-#### 1. Dispatcher Claim & Enqueue Protocol (PostgreSQL to BullMQ)
-- **Normal Ingress:** The HTTP webhook handler derives `organization_id`, inserts into `webhook_events` (`dispatch_status = 'PENDING_DISPATCH', processing_status = 'UNCLAIMED'`), and attempts immediate BullMQ enqueue with deterministic `jobId = event.id`. If enqueue succeeds, it updates `dispatch_status = 'DISPATCHED'`.
-- **Dispatcher Sweeper (Crash Recovery):** If the HTTP handler crashes between DB insert and BullMQ enqueue, or BullMQ is temporarily unavailable, the Dispatcher Sweeper recovers the event:
+#### 1. Dual Dispatch Architecture: Immediate vs. Sweeper Enqueue
+Project Orbit implements **At-Least-Once Delivery to the Queue** and **Exactly-Once Execution in the Database Engine**.
+
+- **Path A: Immediate HTTP-Handler Enqueue (Low Latency):**
+  1. The HTTP handler derives `organization_id` via `resolve_channel_routing()`.
+  2. Inside `TenantTransactionRunner.runWithTenant(organizationId, fn(tx))`, inserts into `webhook_events`:
+     ```sql
+     INSERT INTO webhook_events (
+       organization_id, channel_id, provider, idempotency_key,
+       payload, dispatch_status, dispatch_token, dispatch_expires_at, processing_status
+     )
+     VALUES (
+       :orgId, :channelId, :provider, :idempotencyKey,
+       :payload, 'PENDING_DISPATCH', :immediateToken, NOW() + INTERVAL '30 seconds', 'UNCLAIMED'
+     )
+     ON CONFLICT (organization_id, channel_id, provider, idempotency_key) DO NOTHING
+     RETURNING id, dispatch_token;
+     ```
+  3. The database transaction commits.
+  4. The HTTP handler enqueues to BullMQ using deterministic `jobId`:
+     ```typescript
+     await webhookQueue.add('process-webhook', {
+       organizationId,
+       eventId: event.id
+     }, {
+       jobId: event.id,
+       removeOnComplete: 1000,
+       removeOnFail: 5000
+     });
+     ```
+  5. The handler acknowledges dispatch in PostgreSQL:
+     ```sql
+     UPDATE webhook_events
+     SET dispatch_status = 'DISPATCHED',
+         dispatch_token = NULL,
+         dispatch_expires_at = NULL,
+         updated_at = NOW()
+     WHERE id = :id AND dispatch_token = :immediateToken;
+     ```
+  6. Responds HTTP 200 to provider.
+
+- **Path B: Background Dispatch Sweeper (Fail-Safe Recovery):**
+  If the HTTP handler crashed before step 4 or BullMQ was temporarily unavailable, the event sits in PostgreSQL with `dispatch_status = 'PENDING_DISPATCH'`. The Dispatch Sweeper runs every 10 seconds:
   ```sql
-  -- Atomic claim of pending dispatches using SKIP LOCKED
   WITH claimable AS (
     SELECT id
     FROM webhook_events
@@ -447,48 +670,27 @@ stateDiagram-v2
     FOR UPDATE SKIP LOCKED
   )
   UPDATE webhook_events w
-  SET dispatch_token = :newDispatchToken,
+  SET dispatch_token = :sweeperToken,
       dispatch_expires_at = NOW() + INTERVAL '30 seconds',
       updated_at = NOW()
   FROM claimable
   WHERE w.id = claimable.id
   RETURNING w.id, w.organization_id, w.channel_id, w.dispatch_token;
   ```
-- **Deterministic Enqueue & Acknowledgement:**
-  For each claimed event, the sweeper enqueues to BullMQ: `queue.add('process-webhook', { organizationId, eventId: id }, { jobId: id })`. Because `jobId` is the unique event UUID, BullMQ deduplicates identical jobs in Redis.
-  Upon successful enqueue, the sweeper acknowledges dispatch:
-  ```sql
-  UPDATE webhook_events
-  SET dispatch_status = 'DISPATCHED',
-      dispatch_token = NULL,
-      dispatch_expires_at = NULL,
-      updated_at = NOW()
-  WHERE id = :id AND dispatch_token = :myDispatchToken;
-  ```
-- **Stale Dispatched-but-Unclaimed Recovery:**
-  If an event is marked `DISPATCHED` but the BullMQ job is lost (e.g. Redis restart without persistence or cache eviction) and the event remains `UNCLAIMED` for > 15 minutes, a recovery sweeper resets the dispatch status:
-  ```sql
-  WITH lost_dispatches AS (
-    SELECT id
-    FROM webhook_events
-    WHERE dispatch_status = 'DISPATCHED'
-      AND processing_status = 'UNCLAIMED'
-      AND updated_at < NOW() - INTERVAL '15 minutes'
-    ORDER BY updated_at ASC
-    LIMIT 50
-    FOR UPDATE SKIP LOCKED
-  )
-  UPDATE webhook_events w
-  SET dispatch_status = 'PENDING_DISPATCH',
-      dispatch_token = NULL,
-      dispatch_expires_at = NULL,
-      updated_at = NOW()
-  FROM lost_dispatches
-  WHERE w.id = lost_dispatches.id;
-  ```
-  This returns lost events to `PENDING_DISPATCH`, where the normal dispatcher safely re-enqueues them.
+  The sweeper enqueues each claimed row to BullMQ with `jobId = event.id`, and acknowledges dispatch using `WHERE id = :id AND dispatch_token = :sweeperToken`.
 
-#### 2. Worker Processing Claim & Lease Protocol (BullMQ to Execution)
+#### 2. Concrete Crash-Point Analysis & Deduplication Mechanics
+PostgreSQL remains the durable source of truth. Redis and BullMQ act as transient delivery conduits.
+
+| Crash Point | Failure Mode | Durable State in DB & Queue | Automatic Recovery Mechanism | Guarantee |
+|---|---|---|---|---|
+| **Crash Point 1** | Crash before or during DB insert | DB: None. Queue: None. Provider: Connection reset / 500. | Provider automatically retries HTTP webhook within seconds. | Safe: No partial state exists. |
+| **Crash Point 2** | Crash after DB commit, before BullMQ enqueue call | DB: `PENDING_DISPATCH` with `dispatch_token`. Queue: None. | After 30s (`dispatch_expires_at < NOW()`), Dispatch Sweeper claims row via `SKIP LOCKED`, enqueues to BullMQ, and marks `DISPATCHED`. | Durable: Zero events lost. |
+| **Crash Point 3** | Crash after BullMQ enqueue succeeds, before DB acknowledgement | DB: `PENDING_DISPATCH`. Queue: Job exists with `jobId = event.id`. | After 30s, Sweeper claims row and calls `queue.add(..., { jobId: event.id })`. BullMQ deduplicates identical `jobId`. Worker processes job atomically in DB. | Idempotent: No duplicate processing. |
+| **Crash Point 4** | Redis restart or cache eviction while event marked `DISPATCHED` | DB: `dispatch_status = 'DISPATCHED'`, but `processing_status = 'UNCLAIMED'`. Queue: Job lost. | Stale Dispatched Sweeper detects `updated_at < NOW() - 15m`. Resets `dispatch_status = 'PENDING_DISPATCH'`. Dispatch Sweeper re-enqueues to BullMQ. | Durable: Lost Redis jobs recovered. |
+| **Crash Point 5** | Worker crashes mid-execution | DB: `processing_status = 'PROCESSING'`, `lease_expires_at` in past. Queue: Stalled. | Processing Recovery Sweeper detects expired lease. Resets to `UNCLAIMED` with exponential backoff or marks `DEAD_LETTER` if `attempt_count >= max_attempts`. | Resilient: Poison pills quarantined. |
+
+#### 3. Worker Processing Claim & Lease Protocol (BullMQ to Execution)
 - **Worker Lease Claim:** Worker picks up BullMQ job and acquires an atomic processing lease:
   ```sql
   UPDATE webhook_events
@@ -547,6 +749,7 @@ erDiagram
     AI_REQUESTS ||--o{ AI_REQUEST_ATTEMPTS : has_attempts
     AI_REQUESTS ||--o| AI_RESERVATIONS : holds_reservation
     AI_REQUESTS ||--o| AI_USAGE_EVENTS : bills_as
+    AI_MODEL_PRICING_SCHEDULES ||--o{ AI_REQUEST_ATTEMPTS : prices_attempt
 
     AI_REQUESTS {
         uuid id PK
@@ -557,6 +760,18 @@ erDiagram
         timestamptz created_at
     }
 
+    AI_MODEL_PRICING_SCHEDULES {
+        uuid id PK
+        varchar provider
+        varchar canonical_model
+        varchar pricing_version
+        decimal prompt_token_rate_per_m
+        decimal completion_token_rate_per_m
+        varchar currency
+        timestamptz effective_from
+        timestamptz effective_to
+    }
+
     AI_REQUEST_ATTEMPTS {
         uuid id PK
         uuid request_id FK
@@ -564,15 +779,18 @@ erDiagram
         int attempt_number
         varchar provider
         varchar model
+        varchar canonical_model
         varchar provider_attempt_id
         varchar status
         int prompt_tokens
         int completion_tokens
         int total_tokens
+        varchar pricing_version
+        decimal prompt_rate_per_m
+        decimal completion_rate_per_m
+        varchar cost_currency
         decimal incurred_provider_cost_usd
         varchar cost_reconciliation_status
-        varchar pricing_model_version
-        varchar cost_currency
         boolean is_tenant_billable
     }
 
@@ -610,26 +828,55 @@ CREATE TABLE ai_requests (
   CONSTRAINT uq_ai_requests_org_idempotency UNIQUE (organization_id, idempotency_key)
 );
 
--- 2. Physical Provider Attempts (Raw Invocations & Platform COGS)
+-- 2. System Model Pricing Schedules Catalog
+-- Relational versioning of provider rates over time. Read-only for orbit_app.
+CREATE TABLE ai_model_pricing_schedules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider VARCHAR(32) NOT NULL,            -- 'OPENAI', 'ANTHROPIC', 'MOCK'
+  canonical_model VARCHAR(64) NOT NULL,     -- 'gpt-4o-mini', 'claude-3-5-sonnet'
+  model_alias VARCHAR(64),                  -- 'gpt-4o-mini-latest', 'gpt-4o-mini-2024-07-18'
+  pricing_version VARCHAR(32) NOT NULL,     -- '2024-07-18-v1', '2024-10-01-v1'
+  prompt_token_rate_per_m DECIMAL(10, 6) NOT NULL,     -- e.g. 0.150000 ($0.15 per 1M tokens)
+  completion_token_rate_per_m DECIMAL(10, 6) NOT NULL, -- e.g. 0.600000 ($0.60 per 1M tokens)
+  currency VARCHAR(8) NOT NULL DEFAULT 'USD',
+  effective_from TIMESTAMPTZ NOT NULL,
+  effective_to TIMESTAMPTZ,                 -- NULL indicates currently active schedule
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_pricing_provider_model_version UNIQUE (provider, canonical_model, pricing_version)
+);
+
+CREATE INDEX idx_pricing_lookup 
+  ON ai_model_pricing_schedules (provider, canonical_model, effective_from, effective_to);
+
+GRANT SELECT ON ai_model_pricing_schedules TO orbit_app;
+
+-- 3. Physical Provider Attempts (Raw Invocations & Platform COGS)
+-- Stores immutable rate snapshots for 100% financial reproducibility.
 CREATE TABLE ai_request_attempts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   request_id UUID NOT NULL,
   organization_id UUID NOT NULL,
   attempt_number INT NOT NULL,
-  provider VARCHAR(32) NOT NULL,          -- 'OPENAI', 'MOCK'
-  model VARCHAR(64) NOT NULL,
-  provider_attempt_id VARCHAR(128),       -- e.g. OpenAI x-request-id header if received
-  status VARCHAR(32) NOT NULL,            -- 'SUCCESS', 'TIMEOUT', 'PROVIDER_5XX', 'CLIENT_ERROR'
+  provider VARCHAR(32) NOT NULL,            -- 'OPENAI', 'MOCK'
+  model VARCHAR(64) NOT NULL,               -- Model requested (e.g. 'gpt-4o-mini-2024-07-18')
+  canonical_model VARCHAR(64) NOT NULL,     -- Canonical model resolved (e.g. 'gpt-4o-mini')
+  provider_attempt_id VARCHAR(128),         -- e.g. OpenAI x-request-id header if received
+  status VARCHAR(32) NOT NULL,              -- 'SUCCESS', 'TIMEOUT', 'PROVIDER_5XX', 'CLIENT_ERROR'
   prompt_tokens INT,
   completion_tokens INT,
   total_tokens INT,
-  incurred_provider_cost_usd DECIMAL(10, 6), -- Platform COGS liability (NULL until calculated)
-  cost_reconciliation_status VARCHAR(32) NOT NULL DEFAULT 'PENDING', -- 'PENDING', 'KNOWN', 'ESTIMATED', 'UNKNOWN', 'RECONCILED'
-  pricing_model_version VARCHAR(64) NOT NULL DEFAULT '2024-08-06',
+  
+  -- Frozen Rate Snapshot (NO HARDCODED SCHEMA DEFAULTS)
+  pricing_version VARCHAR(32) NOT NULL,     -- Applied schedule version (e.g. '2024-07-18-v1')
+  prompt_rate_per_m DECIMAL(10, 6) NOT NULL,     -- Snapshot rate active at attempt time
+  completion_rate_per_m DECIMAL(10, 6) NOT NULL, -- Snapshot rate active at attempt time
   cost_currency VARCHAR(8) NOT NULL DEFAULT 'USD',
+  incurred_provider_cost_usd DECIMAL(10, 6),     -- Platform COGS liability (NULL until calculated)
+  cost_reconciliation_status VARCHAR(32) NOT NULL DEFAULT 'PENDING', -- 'PENDING', 'KNOWN', 'ESTIMATED', 'UNKNOWN', 'RECONCILED'
   is_tenant_billable BOOLEAN NOT NULL DEFAULT false,
   error_message TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  
   CONSTRAINT fk_attempts_request_org FOREIGN KEY (request_id, organization_id)
     REFERENCES ai_requests (id, organization_id) ON DELETE RESTRICT,
   CONSTRAINT uq_ai_attempts_request_attempt UNIQUE (request_id, attempt_number)
@@ -639,7 +886,7 @@ CREATE UNIQUE INDEX idx_attempts_provider_attempt_id
   ON ai_request_attempts (provider, provider_attempt_id)
   WHERE provider_attempt_id IS NOT NULL;
 
--- 3. Durable Quota Reservation Ledger (Ephemeral, Purged after 30 Days)
+-- 4. Durable Quota Reservation Ledger (Ephemeral, Purged after 30 Days)
 CREATE TABLE ai_reservations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   request_id UUID NOT NULL UNIQUE,
@@ -653,7 +900,7 @@ CREATE TABLE ai_reservations (
     REFERENCES ai_requests (id, organization_id) ON DELETE CASCADE
 );
 
--- 4. Customer Billable Usage Ledger (Exactly-Once Billing per Request)
+-- 5. Customer Billable Usage Ledger (Exactly-Once Billing per Request)
 CREATE TABLE ai_usage_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   request_id UUID NOT NULL UNIQUE,
@@ -666,36 +913,49 @@ CREATE TABLE ai_usage_events (
 );
 ```
 
-### 8.3 Separation of Platform COGS vs. Tenant Billing
-Platform cost accounting and customer billing represent separate financial ledgers and must never be conflated:
+### 8.3 Dynamic Pricing Versioning & Historical Reproducibility
+Hardcoded default pricing strings in schemas or code risk silently assigning obsolete rates to future invocations:
+1. **Dynamic Schedule Selection:** At invocation time, the AI engine resolves the model string to its canonical name and queries the active schedule:
+   ```sql
+   SELECT pricing_version, prompt_token_rate_per_m, completion_token_rate_per_m, currency
+   FROM ai_model_pricing_schedules
+   WHERE provider = :provider
+     AND canonical_model = :canonicalModel
+     AND effective_from <= NOW()
+     AND (effective_to IS NULL OR effective_to > NOW())
+   ORDER BY effective_from DESC
+   LIMIT 1;
+   ```
+2. **Immutable Snapshot on Every Attempt:** The selected rates are recorded in `ai_request_attempts`. When a provider changes prices, an administrator inserts a new schedule with a new `effective_from` date and sets `effective_to` on the prior version. Past attempts remain completely reproducible because they link to frozen snapshot rates.
+
+### 8.4 Separation of Platform COGS vs. Tenant Billing
+Platform cost accounting and customer retail billing represent separate financial ledgers and must never be conflated:
 
 1. **Platform COGS (Cost of Goods Sold):** Recorded in `ai_request_attempts.incurred_provider_cost_usd`. This reflects the expense owed to the model vendor (e.g. OpenAI). It is tracked for every physical invocation, including timeouts and retries, to establish the company's financial liabilities and tax-deductible expenses.
 2. **Tenant-Billable Usage:** Recorded in `ai_usage_events`. This reflects the commercial usage consumed by the customer. Exactly **one** billable event is created per successful turn (`UNIQUE(request_id)`). If the platform retries an attempt due to an OpenAI 500 error or a timeout, the failed attempts are marked `is_tenant_billable = false`. The customer is never billed for platform infrastructure failures.
-3. **Tenant Subscription & Usage Pricing:** Commercial retail pricing is governed by the organization's `subscriptions` tier (e.g. $49/month including 100,000 tokens, +$15 per 50,000 token overage pack). Provider cost ($0.15/1M tokens) is distinct from tenant price.
+3. **Tenant Subscription & Usage Pricing:** Commercial retail pricing is governed by the organization's `subscriptions` tier (e.g. $49/month including 100,000 tokens, +$15 per 50,000 token overage pack). Provider cost ($0.15/1M tokens) is distinct from tenant retail price.
 
-### 8.4 Cost Accounting States & Reconciliation
+### 8.5 Cost Accounting States & Reconciliation
 Costs are never silently defaulted to zero. The state machine explicitly accounts for all liabilities:
 
-| State | Description | Incurred Cost Value | Pricing Version & Currency | Billable to Tenant? |
+| State | Description | Incurred Cost Value | Rate Snapshot Recorded | Billable to Tenant? |
 |---|---|---|---|---|
-| `PENDING` | Attempt in flight; tokens not yet known. | `NULL` | Model default (`USD`) | No |
-| `KNOWN` | Provider returned exact completion tokens. | Exact formula: `(prompt * rate_in) + (completion * rate_out)`. | Recorded (e.g. `2024-08-06`, `USD`) | Yes (if successful attempt) |
-| `ESTIMATED` | Client-side timeout (e.g. 30s) or severed socket before completion headers returned. | Conservative upper-bound: `(prompt_tokens * rate_in) + (max_tokens_limit * rate_out)`. | Recorded (e.g. `2024-08-06`, `USD`) | No (Platform COGS Liability) |
-| `UNKNOWN` | Abrupt worker crash or socket reset before prompt tokens were recorded. | `NULL` (explicitly flagged for offline invoice audit). Never converted to 0.00. | Model default (`USD`) | No (Platform COGS Liability) |
+| `PENDING` | Attempt in flight; tokens not yet known. | `NULL` | Selected Schedule Snapshot | No |
+| `KNOWN` | Provider returned exact completion tokens. | Exact formula: `(prompt * rate_in / 1M) + (completion * rate_out / 1M)`. | Frozen Snapshot | Yes (if successful attempt) |
+| `ESTIMATED` | Client-side timeout (e.g. 30s) or severed socket before completion headers returned. | Conservative upper-bound: `(prompt * rate_in / 1M) + (max_tokens_budget * rate_out / 1M)`. | Frozen Snapshot | No (Platform COGS Liability) |
+| `UNKNOWN` | Abrupt worker crash or socket reset before prompt tokens were recorded. | `NULL` (explicitly flagged for offline invoice audit). Never converted to 0.00. | Selected Schedule Snapshot | No (Platform COGS Liability) |
 | `RECONCILED` | Audited against provider monthly invoice / reporting ledger. | Reconciled invoice line-item amount. | Audit ledger reference | Internal reporting only |
 
 1. **Handling Timeouts & Platform COGS:**
-   - On a 30s client-side timeout, Attempt 1 logs `status = 'TIMEOUT', cost_reconciliation_status = 'ESTIMATED', incurred_provider_cost_usd = calculateMaxCost(prompt_tokens, max_tokens, model)`.
+   - On a 30s client-side timeout, Attempt 1 logs `status = 'TIMEOUT', cost_reconciliation_status = 'ESTIMATED', incurred_provider_cost_usd = calculateMaxCost(prompt_tokens, max_tokens, prompt_rate_per_m, completion_rate_per_m)`.
    - Attempt 1 is flagged `is_tenant_billable = false`.
    - Month-end reconciliation ingests OpenAI's invoice CSV, comparing vendor charges against the sum of `incurred_provider_cost_usd` and logging variances.
 2. **Handling Retries:**
    - Attempt 2 succeeds. It logs `status = 'SUCCESS', cost_reconciliation_status = 'KNOWN', is_tenant_billable = true`.
    - The customer turn completes, and Attempt 2 tokens are committed to `ai_usage_events`.
    - `UNIQUE(request_id)` on `ai_usage_events` guarantees exactly-once customer billing.
-3. **Handling Quota Under-Reservation:**
-   - If actual usage exceeds the reservation (e.g. 2,000 reserved, 2,850 actual):
-   - Reconciliation commits the full 2,850 tokens to `usage_records` and clears the 2,000 reservation.
-   - If this puts `committed > monthly_limit`, the tenant enters an overdraft state. All subsequent reservation requests are rejected immediately with `QuotaExceededException`.
+3. **Aggregate Invoice Reconciliation Limitations:**
+   - OpenAI monthly invoices represent aggregate account-level billing, not request-by-request receipts. Individual requests are correlated where provider usage exports provide `x-request-id` / `provider_attempt_id`. Aggregate discrepancies are recorded in a platform reconciliation variance ledger rather than attempting to force artificial line-item precision onto an aggregate invoice.
 
 ---
 
@@ -749,9 +1009,10 @@ Unit tests and mocks cannot prove RLS correctness. Real integration tests must e
 6. **Connection Pool Leak Prevention:** Verifies that when a connection is returned to the pool after `COMMIT` or `ROLLBACK`, subsequent queries on that pooled connection without a new tenant context return 0 rows (no leaked session parameters across requests).
 7. **Dynamic Tenant Switching:** Verifies that switching tenants requires a new transaction and that no residual visibility from Tenant A persists when executing as Tenant B.
 8. **Runtime Role Restrictions:** Verifies that tests execute strictly under the `orbit_app` role (`NOSUPERUSER, NOBYPASSRLS`). Direct bypass attempts via raw SQL return 0 rows.
+9. **Routing Lookup Security Definer Verification:** Verifies that `orbit_app` CANNOT execute direct SELECT/INSERT/UPDATE on `channel_routing_lookups`, and can only resolve via `resolve_channel_routing()` or mutate via tenant-bound `register_channel_routing()`.
 
 > [!NOTE]
-> **Verification Status:** Static relational schema integrity, composite foreign key consistency, and state transition contracts have been verified via analysis and schema validation scripts. Live PostgreSQL execution tests remain conceptual at this planning phase and will be executed when Milestone 1 implementation is authorized.
+> **Verification Status:** Static relational schema integrity, composite foreign key consistency, role permissions, and state transition contracts have been verified via static schema validation scripts and Gravitas discipline. Live PostgreSQL execution tests remain conceptual at this planning phase and will be executed when Milestone 1 implementation is authorized.
 
 ---
 
