@@ -1,11 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { apiRequest, requestTokenRefresh, setAuthFailureHandler } from '../../apps/web/src/api/client';
+import {
+  apiRequest,
+  requestTokenRefresh,
+  setAuthFailureHandler,
+  resetClientState,
+} from '../../apps/web/src/api/client';
 
 describe('Frontend Single-Flight Refresh Concurrency Unit Tests', () => {
   const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    resetClientState();
   });
 
   afterEach(() => {
@@ -202,6 +208,99 @@ describe('Frontend Single-Flight Refresh Concurrency Unit Tests', () => {
 
     // Login 401 must NOT trigger a token refresh attempt
     expect(refreshAttempted).toBe(false);
+  });
+
+  it('6. timing edge-case: request receiving stale 401 after refresh already succeeded does not trigger second refresh', async () => {
+    let refreshCallCount = 0;
+    let tokenRefreshed = false;
+
+    // Simulate R1 and R2 both dispatched when token was expired.
+    // R1 gets 401, refreshes token, finishes refresh.
+    // R2's 401 response arrives AFTER R1's refresh has already completed!
+    let resolveR2Response: (value: any) => void;
+    const r2Pending = new Promise((resolve) => {
+      resolveR2Response = resolve;
+    });
+
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url === '/api/auth/refresh') {
+        refreshCallCount++;
+        tokenRefreshed = true;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data: { user: { id: 'u1' } } }),
+        };
+      }
+
+      if (url === '/api/channels') {
+        if (!tokenRefreshed) {
+          return {
+            ok: false,
+            status: 401,
+            json: async () => ({ success: false, error: { message: 'Token expired' } }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data: [{ id: 'ch1' }] }),
+        };
+      }
+
+      if (url === '/api/organizations') {
+        // Delay R2's 401 until after R1's refresh has completed
+        await r2Pending;
+        // Even if R2 returns 401 (stale from old token)
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ success: false, error: { message: 'Stale token 401' } }),
+        };
+      }
+
+      return { ok: false, status: 404 };
+    });
+
+    // Dispatch R1 and R2
+    const p1 = apiRequest('/api/channels');
+    // Ensure R2 is dispatched while tokenRefreshed is false (dispatch time recorded before refresh)
+    const p2 = apiRequest('/api/organizations');
+
+    // Wait for R1 to complete (including its 401 -> refresh -> retry)
+    const channels = await p1;
+    expect(channels).toEqual([{ id: 'ch1' }]);
+    expect(refreshCallCount).toBe(1);
+
+    // Now release R2's delayed 401 (stale response arriving after refresh succeeded)
+    // Note: When R2 retries, mock fetch needs to return 200 for organizations on the retry
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url === '/api/auth/refresh') {
+        refreshCallCount++;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data: { user: { id: 'u1' } } }),
+        };
+      }
+      if (url === '/api/organizations') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data: [{ id: 'org1' }] }),
+        };
+      }
+      return { ok: false, status: 404 };
+    });
+
+    resolveR2Response!(null);
+
+    const orgs = await p2;
+    expect(orgs).toEqual([{ id: 'org1' }]);
+
+    // Key assertion: NO second call to /api/auth/refresh was made!
+    // Total refresh calls across both R1 and stale R2: exactly 1
+    expect(refreshCallCount).toBe(1);
   });
 });
 

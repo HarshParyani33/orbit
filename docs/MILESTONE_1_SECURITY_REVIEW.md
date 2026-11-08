@@ -6,7 +6,7 @@
 **Milestone:** `Milestone 1 — Foundation, Multi-Tenant Security, Authentication & Minimal Dashboard`  
 **Governance:** `Gravitas Core Skill Mode (6 Invariants Strictly Enforced)`  
 **Repository:** `HarshParyani33/orbit`  
-**Verification Baseline:** `65 / 65 Passing Tests (18 DB Infrastructure + 18 DB Auth/Concurrency + 24 Guard/Controller Unit + 5 Frontend Refresh Unit)`
+**Verification Baseline:** `74 / 74 Passing Tests (36 Real DB Integration + 8 Real HTTP Network Integration + 30 Unit Tests)`
 
 ---
 
@@ -122,7 +122,17 @@ Because `request.headers['sec-fetch-site']` was treated as an authorized custom 
 4. **Custom Header Security Contract (`X-CSRF-Token`, `X-Requested-With`):**
    - Custom headers are accepted when Origin/Referer are absent (e.g. specialized clients or privacy-stripped referrers) based strictly on the browser **Same-Origin Policy (SOP) and CORS Preflight contract**.
    - Browsers forbid cross-origin JavaScript from setting non-simple custom headers (like `X-Requested-With` or `X-CSRF-Token`) without an explicit CORS preflight response allowing them (`Access-Control-Allow-Headers`).
-   - In `apps/api/src/main.ts`, CORS origins are strictly restricted to `FRONTEND_URL`. Therefore, an untrusted third-party site cannot forge custom headers in cross-origin requests.
+   - In `apps/api/src/app.config.ts`, `configureApp(app)` explicitly configures CORS credentials, origin whitelist (`FRONTEND_URL`), and allowed headers:
+     ```typescript
+     allowedHeaders: [
+       'Content-Type',
+       'Authorization',
+       'X-Organization-Id',
+       'X-CSRF-Token',
+       'X-Requested-With',
+     ]
+     ```
+   - Therefore, legitimate browser clients sending `X-Requested-With` pass CORS preflight, while untrusted third-party sites cannot forge custom headers in cross-origin requests.
    - **Important Clarification:** `X-Requested-With` is NOT a secret CSRF token; its protection derives exclusively from browser SOP and CORS preflight enforcement.
 5. **Login CSRF Considerations:**
    - In Project Orbit, `POST /api/auth/login` and `POST /api/auth/register` are credentialed endpoints that do not rely on ambient session cookies (`hasAuthCookie` is false).
@@ -134,7 +144,7 @@ Because `request.headers['sec-fetch-site']` was treated as an authorized custom 
 ### Finding 5: Database Dev Configuration Hardening
 
 #### Vulnerability Description
-`docker-compose.yml` previously exposed PostgreSQL (`5432:5432`) and Redis (`6379:6379`) on `0.0.0.0`, and contained a predictable default password fallback (`${POSTGRES_PASSWORD:-postgres_master_dev_password}`).
+`docker-compose.yml` previously exposed PostgreSQL (`5432:5432`) and Redis (`6379:6379`) on `0.0.0.0`, and contained a predictable default password fallback (`${POSTGRES_PASSWORD:-postgres_master_dev_password}`). Furthermore, `.env.example` previously documented a predictable development password.
 
 #### Corrective Engineering
 1. **Localhost Binding:**
@@ -145,8 +155,12 @@ Because `request.headers['sec-fetch-site']` was treated as an authorized custom 
      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in environment or .env}
      ```
    - If `POSTGRES_PASSWORD` is unset, `docker compose` immediately aborts with an error rather than starting with a predictable default.
-3. **Safe Documentation:**
-   - Updated `.env.example` with clear instructions that developers must copy the template to `.env` and set a strong password.
+3. **Safe Documentation & Unmistakable Secret Placeholder:**
+   - Updated `.env.example` with clear instructions that developers must generate a random secret:
+     ```text
+     POSTGRES_PASSWORD=CHANGE_ME_GENERATE_RANDOM_SECRET_FOR_POSTGRES_SUPERUSER
+     ```
+   - Automated regression tests verify that `.env.example` does not contain predictable passwords and explicitly requires developer generation.
 
 ---
 
@@ -166,14 +180,19 @@ Because `request.headers['sec-fetch-site']` was treated as an authorized custom 
 
 #### Problem Description
 When multiple dashboard components render simultaneously with an expired 15-minute access token, each component independently issues an API request receiving HTTP 401. If the client does not serialize token refresh, multiple concurrent calls to `POST /api/auth/refresh` will hit the server at the exact same millisecond with the same refresh token. Because the server enforces atomic rotation with row locking and theft detection, the second concurrent refresh triggers emergency session family revocation!
+Additionally, if an in-flight request was dispatched before token expiration but received a 401 *after* a single-flight refresh completed, naive retry logic would trigger a redundant refresh with an already-consumed token.
 
 #### Corrective Engineering (`apps/web/src/api/client.ts`)
 1. **Single-Flight Interceptor (`refreshPromise`):**
    - When an API request receives a 401 Unauthorized, it invokes `requestTokenRefresh()`.
    - If a refresh operation is already in-flight, subsequent requests receive the **same shared promise** rather than dispatching a duplicate HTTP request.
-2. **Atomic Queue Resolution & Retry:**
+2. **In-Flight Stale 401 Interception:**
+   - Client records `lastSuccessfulRefreshTime = performance.now()` upon successful refresh.
+   - When a 401 arrives, it compares `requestDispatchTime` against `lastSuccessfulRefreshTime`.
+   - If `lastSuccessfulRefreshTime > requestDispatchTime`, the 401 was caused by a stale token superseded by the just-completed refresh. The client retries the request once immediately with the new cookies without dispatching a redundant refresh!
+3. **Atomic Queue Resolution & Retry:**
    - When the single refresh completes with HTTP 200, all waiting requests unblock simultaneously and retry their original requests once (`_retry: true`) with the newly issued ambient cookies.
-3. **Failure Handling & No Replay of Consumed Tokens:**
+4. **Failure Handling & No Replay of Consumed Tokens:**
    - If token refresh fails (e.g. expired or revoked), `refreshPromise` resolves to `false`.
    - All waiting requests reject immediately (`Session expired or revoked. Please log in again.`).
    - The registered `authFailureHandler` clears local session state (`user = null`, `organizations = []`, `orbit_active_org_id` removed).
@@ -183,15 +202,15 @@ When multiple dashboard components render simultaneously with an expired 15-minu
 
 ## 3. Test Suite Taxonomy & Verification Evidence
 
-To ensure complete verification accuracy and prevent conflating unit/guard tests with real database integration tests, the test suite is partitioned into four distinct categories:
+To ensure complete verification accuracy and prevent conflating unit/guard tests with real database integration tests or real HTTP integration tests, the test suite is partitioned into four distinct categories:
 
 ```text
 ================================================================================
 TEST SUITE EXECUTION SUMMARY
 ================================================================================
-Test Files  5 passed (5)
-Tests       65 passed (65)
-Duration    4.64s
+Test Files  6 passed (6)
+Tests       74 passed (74)
+Duration    ~15s
 ```
 
 ### Category 1: Real Database & PostgreSQL Role Integration Tests (18 tests)
@@ -210,19 +229,26 @@ Duration    4.64s
 | `tests/integration/auth.spec.ts` | 11 | Argon2id password hashing, real session generation, single-thread refresh rotation, family theft revocation, logout session cleanup. | **11 / 11 PASSED** |
 | `tests/integration/security-pass.spec.ts` (DB subset) | 7 | Real PostgreSQL `SELECT ... FOR UPDATE` concurrency testing (`Promise.allSettled` proves serialized rotation and emergency family revocation), suspended user database lifecycle, real transaction rollback on registration failure (0 orphaned records), invitation role permissions in DB. | **7 / 7 PASSED** |
 
-### Category 3: Application Guard & Security Unit Tests (24 tests)
+### Category 3: Real HTTP CORS & CSRF Pipeline Network Integration Tests (8 tests)
+*Executed against live NestJS HTTP server listening on TCP random port with native fetch client.*
+
+| Test File | Tests | Focus Area | Verification Status |
+|---|:---:|---|:---:|
+| `tests/integration/http-cors-csrf.spec.ts` | 8 | Real TCP HTTP pipeline tests: Preflight OPTIONS allowed origin verification (`Access-Control-Allow-Origin`, `Access-Control-Allow-Credentials: true`, `Access-Control-Allow-Headers` containing `X-Requested-With`); Preflight untrusted origin blocking; `Sec-Fetch-Site: cross-site` 403 Forbidden rejection; unauthorized Origin 403 Forbidden rejection; valid Origin acceptance; `X-Requested-With` header acceptance; `X-CSRF-Token` acceptance; programmatic Bearer token exemption. | **8 / 8 PASSED** |
+
+### Category 4: Application Guard, Config & Security Unit Tests (24 tests)
 *Executed with mocked `ExecutionContext` testing guard algorithms, route param matching, and configuration syntax.*
 
 | Test File | Tests | Focus Area | Verification Status |
 |---|:---:|---|:---:|
-| `tests/integration/security-pass.spec.ts` (Unit subset) | 24 | Route parameter vs header IDOR mismatch rejection; `CsrfGuard` 10-test regression suite (cross-site `Sec-Fetch-Site` rejection, same-origin acceptance, same-site with/without valid origin, missing context, custom header contract, safe method exemption, Bearer token exemption); `docker-compose.yml` required variable syntax verification. | **24 / 24 PASSED** |
+| `tests/integration/security-pass.spec.ts` (Unit subset) | 24 | Route parameter vs header IDOR mismatch rejection; `CsrfGuard` 10-test unit suite (cross-site `Sec-Fetch-Site` rejection, same-origin acceptance, same-site with/without valid origin, missing context, custom header contract, safe method exemption, Bearer token exemption); `docker-compose.yml` required variable syntax verification; `.env.example` placeholder validation. | **24 / 24 PASSED** |
 
-### Category 4: Client-Side Single-Flight Refresh Concurrency Unit Tests (5 tests)
-*Executed against mocked Fetch API verifying client queueing and single-flight deduplication.*
+### Category 5: Client-Side Single-Flight Refresh Concurrency Unit Tests (6 tests)
+*Executed against mocked Fetch API verifying client queueing, deduplication, and timing edge-case protection.*
 
 | Test File | Tests | Focus Area | Verification Status |
 |---|:---:|---|:---:|
-| `tests/unit/client-refresh.spec.ts` | 5 | Verifies that simultaneous API requests receiving 401 trigger exactly ONE call to `/api/auth/refresh`, all waiting requests retry once, failed refresh calls `authFailureHandler` without replaying consumed tokens, and login/register 401s do not trigger refresh. | **5 / 5 PASSED** |
+| `tests/unit/client-refresh.spec.ts` | 6 | Verifies that simultaneous API requests receiving 401 trigger exactly ONE call to `/api/auth/refresh`, all waiting requests retry once, failed refresh calls `authFailureHandler` without replaying consumed tokens, login/register 401s do not trigger refresh, and in-flight requests receiving 401 after refresh completion retry immediately without duplicate refresh. | **6 / 6 PASSED** |
 
 ---
 

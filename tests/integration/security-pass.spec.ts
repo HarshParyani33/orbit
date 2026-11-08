@@ -477,9 +477,10 @@ describe('Milestone 1 — Comprehensive Security Correction Suite', () => {
       expect(composeContent).not.toContain('postgres_master_dev_password');
     });
 
-    it('verifies .env.example contains POSTGRES_PASSWORD template', () => {
+    it('verifies .env.example contains POSTGRES_PASSWORD placeholder with no predictable default credentials', () => {
       const envExample = fs.readFileSync(path.resolve(process.cwd(), '.env.example'), 'utf-8');
-      expect(envExample).toContain('POSTGRES_PASSWORD=postgres_master_dev_password');
+      expect(envExample).toContain('POSTGRES_PASSWORD=CHANGE_ME_GENERATE_RANDOM_SECRET_FOR_POSTGRES_SUPERUSER');
+      expect(envExample).not.toContain('postgres_master_dev_password');
     });
   });
 

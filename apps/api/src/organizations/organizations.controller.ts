@@ -8,6 +8,7 @@ import {
   HttpCode,
   HttpStatus,
   ForbiddenException,
+  Inject,
 } from '@nestjs/common';
 import { OrganizationsService } from './organizations.service';
 import { JwtAuthGuard } from '../auth/auth.guard';
@@ -25,7 +26,7 @@ import { ApiResponse, TenantContext, Role } from '@orbit/shared';
 @Controller('api/organizations')
 @UseGuards(JwtAuthGuard)
 export class OrganizationsController {
-  constructor(private readonly orgService: OrganizationsService) {}
+  constructor(@Inject(OrganizationsService) private readonly orgService: OrganizationsService) {}
 
   @Get()
   async listUserOrganizations(@CurrentUser() user: RequestUser): Promise<ApiResponse> {

@@ -8,6 +8,7 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  Inject,
 } from '@nestjs/common';
 import { Response, Request } from 'express';
 import { AuthService } from './auth.service';
@@ -25,7 +26,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 
 @Controller('api/auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(@Inject(AuthService) private readonly authService: AuthService) {}
 
   private setCookies(res: Response, accessToken: string, refreshToken: string) {
     res.cookie('access_token', accessToken, {

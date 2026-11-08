@@ -1,10 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { TenantTransactionRunner } from '../tenancy/tenant-transaction-runner';
 
 @Injectable()
 export class ChannelsService {
-  constructor(private readonly tenantRunner: TenantTransactionRunner) {}
+  constructor(@Inject(TenantTransactionRunner) private readonly tenantRunner: TenantTransactionRunner) {}
 
   async listChannels(organizationId: string) {
     return this.tenantRunner.runWithTenant(organizationId, async (tx) => {

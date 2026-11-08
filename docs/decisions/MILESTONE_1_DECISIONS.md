@@ -116,6 +116,28 @@ Diagnostic execution of `python .agents/skills/gravitas/scripts/doctor.py` confi
   - `AuthService.register` is wrapped in `prisma.$transaction(async (tx) => ...)`.
   - User creation, slug reservation, organization creation, owner membership assignment, and initial session creation succeed or fail as an indivisible atomic unit. If any step fails, PostgreSQL rolls back all mutations, leaving zero orphaned records.
 
+### Decision 11: CORS Preflight Allowed Headers Alignment & HTTP Integration Verification
+- **Context:** The frontend attaches `X-Requested-With: XMLHttpRequest` for CSRF defense on state mutations, but the API CORS `allowedHeaders` omitted `X-Requested-With`, causing browser OPTIONS preflights to fail on credentialed cross-origin requests.
+- **Decision:**
+  - Explicitly include `X-Requested-With` in API CORS `allowedHeaders` alongside `Content-Type`, `Authorization`, `X-Organization-Id`, and `X-CSRF-Token`.
+  - Refactor app configuration into a shared `configureApp(app: INestApplication)` helper in `apps/api/src/app.config.ts`, reused identically in production `main.ts` and in an HTTP-level integration test suite (`tests/integration/http-cors-csrf.spec.ts`).
+  - Maintain strict origin verification (`origin: process.env.FRONTEND_URL || 'http://localhost:5173'`) and `credentials: true`. Strictly prohibit wildcard origins.
+
+### Decision 12: Safe Unpredictable Development Password Placeholder
+- **Context:** `.env.example` previously contained a predictable example password (`postgres_master_dev_password`), risking accidental deployment with known defaults.
+- **Decision:**
+  - Replace the example superuser password in `.env.example` with an unmistakable placeholder: `POSTGRES_PASSWORD=CHANGE_ME_GENERATE_RANDOM_SECRET_FOR_POSTGRES_SUPERUSER`.
+  - Document manual setup instructions (e.g. `openssl rand -hex 32`) for developers.
+  - Preserve `docker-compose.yml` required variable validation: `${POSTGRES_PASSWORD:?}` with zero default fallback.
+  - Keep `.env` strictly ignored by `.gitignore`.
+
+### Decision 13: Stale 401 Interception via Monotonic Timestamp Guard
+- **Context:** If a request receives a stale 401 immediately after a concurrent refresh promise has already settled, triggering another refresh could send an already-consumed or redundant refresh token, risking server-side theft revocation.
+- **Decision:**
+  - In `apps/web/src/api/client.ts`, track the monotonic timestamp of the last successful token refresh (`lastRefreshTime = performance.now()`).
+  - Record the dispatch timestamp (`requestTime = performance.now()`) for each request.
+  - If a 401 is received and `lastRefreshTime > requestTime`, recognize that a token refresh already succeeded while the request was in flight. Immediately retry the request once (`_retry: true`) with the updated ambient credentials without dispatching another refresh call.
+
 ---
 
 ## 3. Staged Implementation Plan

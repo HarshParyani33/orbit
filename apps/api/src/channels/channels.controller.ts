@@ -4,6 +4,7 @@ import {
   Post,
   Body,
   UseGuards,
+  Inject,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ChannelsService } from './channels.service';
@@ -15,7 +16,7 @@ import { TenantContext, ApiResponse } from '@orbit/shared';
 @Controller('api/channels')
 @UseGuards(JwtAuthGuard, TenantGuard)
 export class ChannelsController {
-  constructor(private readonly channelsService: ChannelsService) {}
+  constructor(@Inject(ChannelsService) private readonly channelsService: ChannelsService) {}
 
   @Get()
   async list(@CurrentTenant() tenant: TenantContext): Promise<ApiResponse> {

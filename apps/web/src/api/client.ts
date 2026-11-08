@@ -3,6 +3,7 @@ import { ApiResponse } from '@orbit/shared';
 let currentOrgId: string | null = null;
 let refreshPromise: Promise<boolean> | null = null;
 let authFailureHandler: (() => void) | null = null;
+let lastSuccessfulRefreshTime = 0;
 
 export function setActiveOrgId(orgId: string | null) {
   currentOrgId = orgId;
@@ -14,6 +15,17 @@ export function getActiveOrgId(): string | null {
 
 export function setAuthFailureHandler(handler: () => void) {
   authFailureHandler = handler;
+}
+
+export function getLastSuccessfulRefreshTime(): number {
+  return lastSuccessfulRefreshTime;
+}
+
+export function resetClientState(): void {
+  currentOrgId = null;
+  refreshPromise = null;
+  authFailureHandler = null;
+  lastSuccessfulRefreshTime = 0;
 }
 
 /**
@@ -56,6 +68,8 @@ export async function requestTokenRefresh(): Promise<boolean> {
         return false;
       }
 
+      // Record successful refresh timestamp for stale 401 interception
+      lastSuccessfulRefreshTime = performance.now();
       return true;
     } catch {
       if (authFailureHandler) {
@@ -79,6 +93,7 @@ export async function apiRequest<T>(
   endpoint: string,
   options: ApiRequestOptions = {}
 ): Promise<T> {
+  const requestDispatchTime = performance.now();
   const headers = new Headers(options.headers || {});
   headers.set('Content-Type', 'application/json');
 
@@ -107,6 +122,16 @@ export async function apiRequest<T>(
     endpoint.includes('/api/auth/logout');
 
   if (response.status === 401 && !options._retry && !isAuthEndpoint) {
+    // Edge-case protection: If a token refresh already succeeded while this request was in flight,
+    // the 401 response is stale. The updated credentials are already in the cookie jar.
+    // Retry immediately without initiating a redundant and potentially conflicting second refresh.
+    if (lastSuccessfulRefreshTime > requestDispatchTime) {
+      return apiRequest<T>(endpoint, {
+        ...options,
+        _retry: true,
+      });
+    }
+
     // Wait for the single-flight refresh operation
     const refreshOk = await requestTokenRefresh();
 

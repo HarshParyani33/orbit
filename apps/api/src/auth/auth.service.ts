@@ -2,6 +2,7 @@ import {
   Injectable,
   ConflictException,
   UnauthorizedException,
+  Inject,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { PrismaService } from '../prisma/prisma.service';
@@ -33,8 +34,8 @@ interface LockedSessionRow {
 @Injectable()
 export class AuthService {
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly tokenService: TokenService
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(TokenService) private readonly tokenService: TokenService
   ) {}
 
   /**
