@@ -26,3 +26,4 @@ export function configureApp(app: INestApplication): void {
     ],
   });
 }
+
