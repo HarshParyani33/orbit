@@ -481,6 +481,17 @@ describe('Milestone 1 — Comprehensive Security Correction Suite', () => {
       const envExample = fs.readFileSync(path.resolve(process.cwd(), '.env.example'), 'utf-8');
       expect(envExample).toContain('POSTGRES_PASSWORD=CHANGE_ME_GENERATE_RANDOM_SECRET_FOR_POSTGRES_SUPERUSER');
       expect(envExample).not.toContain('postgres_master_dev_password');
+      expect(envExample).toContain('DATABASE_URL=postgresql://orbit_app:CHANGE_ME_ORBIT_APP_PASSWORD');
+      expect(envExample).toContain('MIGRATION_DATABASE_URL=postgresql://orbit_migrator:CHANGE_ME_ORBIT_MIGRATOR_PASSWORD');
+      expect(envExample).toContain('INGRESS_DATABASE_URL=postgresql://orbit_ingress:CHANGE_ME_ORBIT_INGRESS_PASSWORD');
+    });
+
+    it('verifies init-roles.sql declares local-development-only boundary and supports environment overrides', () => {
+      const initRolesSql = fs.readFileSync(path.resolve(process.cwd(), 'docker/postgres/init-roles.sql'), 'utf-8');
+      expect(initRolesSql).toMatch(/SECURITY BOUNDARY NOTICE.*LOCAL DEVELOPMENT & CI ONLY/i);
+      expect(initRolesSql).toContain('\\getenv env_app_pass ORBIT_APP_PASSWORD');
+      expect(initRolesSql).toContain('\\getenv env_migrator_pass ORBIT_MIGRATOR_PASSWORD');
+      expect(initRolesSql).toContain('\\getenv env_ingress_pass ORBIT_INGRESS_PASSWORD');
     });
   });
 

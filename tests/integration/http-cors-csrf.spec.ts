@@ -184,6 +184,50 @@ describe('HTTP-Level CORS & CSRF Real Pipeline Integration Tests', () => {
       expect(json.success).toBe(true);
     });
 
+    it('X-Requested-With header without Origin or Referer satisfies custom header contract through real pipeline', async () => {
+      const login = await authService.login({
+        email: (await prisma.user.findFirst({ where: { memberships: { some: { organizationId: testOrgId } } } }))!.email,
+        password: 'Password123!',
+      });
+
+      const response = await fetch(`${baseUrl}/api/auth/refresh`, {
+        method: 'POST',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+          Cookie: `refresh_token=${login.refreshToken}`,
+          'Content-Type': 'application/json',
+          // Deliberately omitted Origin and Referer
+        },
+      });
+
+      expect(response.status).toBe(200);
+      const json = await response.json();
+      expect(json.success).toBe(true);
+      expect(json.data.user).toBeDefined();
+    });
+
+    it('X-CSRF-Token header without Origin or Referer satisfies custom header contract through real pipeline', async () => {
+      const login = await authService.login({
+        email: (await prisma.user.findFirst({ where: { memberships: { some: { organizationId: testOrgId } } } }))!.email,
+        password: 'Password123!',
+      });
+
+      const response = await fetch(`${baseUrl}/api/auth/refresh`, {
+        method: 'POST',
+        headers: {
+          'X-CSRF-Token': 'test_stateless_csrf_token_value',
+          Cookie: `refresh_token=${login.refreshToken}`,
+          'Content-Type': 'application/json',
+          // Deliberately omitted Origin and Referer
+        },
+      });
+
+      expect(response.status).toBe(200);
+      const json = await response.json();
+      expect(json.success).toBe(true);
+      expect(json.data.user).toBeDefined();
+    });
+
     it('bearer-token request without ambient auth cookies preserves intended behavior (CsrfGuard bypassed)', async () => {
       // Direct programmatic Bearer request to /api/channels (no cookies attached)
       const response = await fetch(`${baseUrl}/api/channels`, {

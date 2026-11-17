@@ -7,6 +7,7 @@
 **Governance:** `Gravitas Core Skill Mode (6 Invariants Strictly Enforced)`  
 **Repository:** `HarshParyani33/orbit`  
 **Verification Baseline:** `74 / 74 Passing Tests (36 Real DB Integration + 8 Real HTTP Network Integration + 30 Unit Tests)`
+**Verification Baseline:** `90 / 90 Passing Tests (36 Real DB Integration + 10 Real HTTP Network Integration + 44 Unit Tests)`
 
 ---
 
@@ -211,6 +212,9 @@ TEST SUITE EXECUTION SUMMARY
 Test Files  6 passed (6)
 Tests       74 passed (74)
 Duration    ~15s
+Test Files  8 passed (8)
+Tests       90 passed (90)
+Duration    ~6s
 ```
 
 ### Category 1: Real Database & PostgreSQL Role Integration Tests (18 tests)
@@ -230,18 +234,22 @@ Duration    ~15s
 | `tests/integration/security-pass.spec.ts` (DB subset) | 7 | Real PostgreSQL `SELECT ... FOR UPDATE` concurrency testing (`Promise.allSettled` proves serialized rotation and emergency family revocation), suspended user database lifecycle, real transaction rollback on registration failure (0 orphaned records), invitation role permissions in DB. | **7 / 7 PASSED** |
 
 ### Category 3: Real HTTP CORS & CSRF Pipeline Network Integration Tests (8 tests)
+### Category 3: Real HTTP CORS & CSRF Pipeline Network Integration Tests (10 tests)
 *Executed against live NestJS HTTP server listening on TCP random port with native fetch client.*
 
 | Test File | Tests | Focus Area | Verification Status |
 |---|:---:|---|:---:|
 | `tests/integration/http-cors-csrf.spec.ts` | 8 | Real TCP HTTP pipeline tests: Preflight OPTIONS allowed origin verification (`Access-Control-Allow-Origin`, `Access-Control-Allow-Credentials: true`, `Access-Control-Allow-Headers` containing `X-Requested-With`); Preflight untrusted origin blocking; `Sec-Fetch-Site: cross-site` 403 Forbidden rejection; unauthorized Origin 403 Forbidden rejection; valid Origin acceptance; `X-Requested-With` header acceptance; `X-CSRF-Token` acceptance; programmatic Bearer token exemption. | **8 / 8 PASSED** |
+| `tests/integration/http-cors-csrf.spec.ts` | 10 | Real TCP HTTP pipeline tests: Preflight OPTIONS allowed origin verification (`Access-Control-Allow-Origin`, `Access-Control-Allow-Credentials: true`, `Access-Control-Allow-Headers` containing `X-Requested-With`); Preflight untrusted origin blocking; `Sec-Fetch-Site: cross-site` 403 Forbidden rejection; unauthorized Origin 403 Forbidden rejection; missing context 403; same-origin acceptance; valid Origin acceptance; `X-Requested-With` without Origin acceptance; `X-CSRF-Token` without Origin acceptance; programmatic Bearer token exemption. | **10 / 10 PASSED** |
 
 ### Category 4: Application Guard, Config & Security Unit Tests (24 tests)
+### Category 4: Application Guard, Config & Security Unit Tests (25 tests)
 *Executed with mocked `ExecutionContext` testing guard algorithms, route param matching, and configuration syntax.*
 
 | Test File | Tests | Focus Area | Verification Status |
 |---|:---:|---|:---:|
 | `tests/integration/security-pass.spec.ts` (Unit subset) | 24 | Route parameter vs header IDOR mismatch rejection; `CsrfGuard` 10-test unit suite (cross-site `Sec-Fetch-Site` rejection, same-origin acceptance, same-site with/without valid origin, missing context, custom header contract, safe method exemption, Bearer token exemption); `docker-compose.yml` required variable syntax verification; `.env.example` placeholder validation. | **24 / 24 PASSED** |
+| `tests/integration/security-pass.spec.ts` (Unit subset) | 25 | Route parameter vs header IDOR mismatch rejection; `CsrfGuard` 10-test unit suite (cross-site `Sec-Fetch-Site` rejection, same-origin acceptance, same-site with/without valid origin, missing context, custom header contract, safe method exemption, Bearer token exemption); `docker-compose.yml` required variable syntax verification; `.env.example` placeholder validation; `init-roles.sql` boundary and `\getenv` configuration. | **25 / 25 PASSED** |
 
 ### Category 5: Client-Side Single-Flight Refresh Concurrency Unit Tests (6 tests)
 *Executed against mocked Fetch API verifying client queueing, deduplication, and timing edge-case protection.*
@@ -249,6 +257,20 @@ Duration    ~15s
 | Test File | Tests | Focus Area | Verification Status |
 |---|:---:|---|:---:|
 | `tests/unit/client-refresh.spec.ts` | 6 | Verifies that simultaneous API requests receiving 401 trigger exactly ONE call to `/api/auth/refresh`, all waiting requests retry once, failed refresh calls `authFailureHandler` without replaying consumed tokens, login/register 401s do not trigger refresh, and in-flight requests receiving 401 after refresh completion retry immediately without duplicate refresh. | **6 / 6 PASSED** |
+
+### Category 6: Cross-Tab Refresh Token Coordination Tests (5 tests)
+*Executed simulating multiple browser contexts using the Web Locks API.*
+
+| Test File | Tests | Focus Area | Verification Status |
+|---|:---:|---|:---:|
+| `tests/unit/cross-tab-refresh.spec.ts` | 5 | Verifies Web Locks API serialization across independent browser contexts: only 1 network refresh is executed while waiting context reuses freshly rotated session; cross-tab stale 401 interception; failure propagation; lock abort/timeout fallback; zero credential or token disclosure. | **5 / 5 PASSED** |
+
+### Category 7: JWT Secret Enforcement & Startup Fail-Fast Tests (8 tests)
+*Executed validating environment schema and fail-fast startup behavior.*
+
+| Test File | Tests | Focus Area | Verification Status |
+|---|:---:|---|:---:|
+| `tests/unit/config-jwt.spec.ts` | 8 | Production startup fails when `JWT_SECRET` is missing/empty, weak (< 32 chars), or matches development defaults; production `COOKIE_SECRET` fails when missing/weak; valid production passes; dev mode defaults; signing/verification source parity; zero secret leakage in error logs. | **8 / 8 PASSED** |
 
 ---
 

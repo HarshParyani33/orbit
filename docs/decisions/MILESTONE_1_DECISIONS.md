@@ -138,6 +138,45 @@ Diagnostic execution of `python .agents/skills/gravitas/scripts/doctor.py` confi
   - Record the dispatch timestamp (`requestTime = performance.now()`) for each request.
   - If a 401 is received and `lastRefreshTime > requestTime`, recognize that a token refresh already succeeded while the request was in flight. Immediately retry the request once (`_retry: true`) with the updated ambient credentials without dispatching another refresh call.
 
+### Decision 14: Cross-Tab Refresh Token Coordination via Web Locks API & Shared Storage Guard
+- **Context:** Finding 1 — Module-level memory state (`refreshPromise`, `lastSuccessfulRefreshTime`) protects concurrent requests within a single JavaScript execution context (tab), but does not coordinate across independent browser tabs sharing the same origin and HTTP-only cookie store. Two concurrent tabs receiving 401 simultaneously would both call `/api/auth/refresh`; the second request would present an already-consumed token, triggering emergency session family revocation.
+- **Decision:**
+  - Implement cross-tab refresh coordination in `apps/web/src/api/client.ts` using the standard W3C Web Locks API (`navigator.locks.request('orbit_auth_refresh', ...)`).
+  - The Web Locks API is natively supported in all modern browser targets (Chrome 69+, Edge 79+, Firefox 96+, Safari 15.4+) and guarantees automatic lock release if the holding tab crashes or terminates.
+  - While Tab 1 holds the exclusive lock and performs the refresh request, Tab 2 queues for the lock.
+  - When Tab 1 succeeds, it updates `localStorage.setItem('orbit_last_refresh_timestamp', String(Date.now()))`.
+  - When Tab 2 acquires the lock, it evaluates whether a refresh completed after its original request dispatch time (`lastRefreshTimestamp > requestDispatchTimestamp`). If so, Tab 2 immediately retries its API request with the fresh rotated cookie without dispatching a second `/api/auth/refresh` request!
+  - Sensitive credentials or tokens are NEVER broadcast or stored in `localStorage` — only non-sensitive Unix epoch timestamps.
+  - If `navigator.locks` is unavailable (e.g. Node.js unit test runtime or non-secure contexts), gracefully fall back to single-flight in-memory coordination.
+
+### Decision 15: Fail-Fast Startup Configuration & Production JWT Secret Validation
+- **Context:** Finding 2 — `apps/api/src/app.module.ts` previously had a hardcoded default fallback (`process.env.JWT_SECRET || 'dev_jwt_secret...'`). Furthermore, `packages/config` environment validation was not enforced during API bootstrap, risking silent execution in production with missing or weak secrets.
+- **Decision:**
+  - Enforce `getConfig()` validation from `@orbit/config` at the very beginning of API bootstrap in `apps/api/src/main.ts` before NestJS initialization or network socket binding.
+  - Remove all hardcoded JWT secret fallbacks from `apps/api/src/app.module.ts`. Register `JwtModule` with secrets obtained strictly from the validated configuration.
+  - Update `packages/config/src/index.ts` with strict production validation:
+    - In `production`: `JWT_SECRET` is strictly required, minimum 32 characters, and cannot match known development placeholders (`dev_jwt_secret...`, `secret`, `changeme`).
+    - In `production`: `COOKIE_SECRET` is strictly required and minimum 32 characters.
+    - In `development` / `test`: Allow explicitly documented development secrets if not set in `.env`.
+  - In `TokenService`: Ensure both signing and verification use the validated configuration source.
+  - Ensure secret values are never logged or exposed in validation error messages.
+
+### Decision 16: Complete HTTP Pipeline CSRF Integration Test Matrix
+- **Context:** Finding 3 — Discrepancy between reported HTTP integration test scenarios and actual tests in `tests/integration/http-cors-csrf.spec.ts`. Scenarios for custom CSRF headers (`X-Requested-With`, `X-CSRF-Token`) without Origin were documented in `docs/MILESTONE_1_FINAL_REVIEW.md` but were missing from the real TCP integration test file.
+- **Decision:**
+  - Add genuine HTTP-level integration tests to `tests/integration/http-cors-csrf.spec.ts` executing over TCP against the live NestJS application for:
+    1. Cookie-authenticated mutation with `X-Requested-With: XMLHttpRequest` and NO Origin/Referer (asserts HTTP 200/201).
+    2. Cookie-authenticated mutation with `X-CSRF-Token` and NO Origin/Referer (asserts HTTP 200/201).
+  - Verify all 8 original scenarios plus the 2 added scenarios (10 HTTP integration tests total), ensuring a 1:1 match between documentation and executable tests.
+
+### Decision 17: Database Role Credential Isolation & Local Development Boundary
+- **Context:** Finding 4 — `docker/postgres/init-roles.sql` contained hardcoded passwords (`orbit_app_pass`, `orbit_migrator_pass`, `orbit_ingress_pass`), and `.env.example` documented hardcoded role passwords in connection URLs, risking accidental reuse in production.
+- **Decision:**
+  - Explicitly document and enforce the security boundary: `docker/postgres/init-roles.sql` and `docker-compose.yml` are strictly for local development and CI testing. Production environments must provision roles via managed infrastructure (e.g. AWS RDS, GCP Cloud SQL) with distinct KMS-rotated secrets.
+  - Update `docker/postgres/init-roles.sql` to support environment-driven credential injection using `psql` native `\getenv` with safe SQL variable interpolation (`:'app_pass'`), falling back to local development values only when environment variables are unset.
+  - Update `.env.example` to use unmistakable `CHANGE_ME_` placeholders for all database connection strings and role passwords, with clear developer instructions on generating unique secrets.
+  - Ensure real `.env` files remain strictly ignored by Git.
+
 ---
 
 ## 3. Staged Implementation Plan

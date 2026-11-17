@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
+import { getConfig } from '@orbit/config';
 import { PrismaService } from './prisma/prisma.service';
 import { TokenService } from './auth/token.service';
 import { AuthService } from './auth/auth.service';
@@ -19,6 +20,14 @@ import { ChannelsController } from './channels/channels.controller';
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'dev_jwt_secret_key_minimum_32_characters_for_security_testing',
       signOptions: { expiresIn: '15m' },
+    JwtModule.registerAsync({
+      useFactory: () => {
+        const config = getConfig();
+        return {
+          secret: config.JWT_SECRET,
+          signOptions: { expiresIn: '15m' },
+        };
+      },
     }),
   ],
   controllers: [

@@ -2,6 +2,7 @@
 ## Foundation, Multi-Tenant Security, Authentication & Minimal Dashboard
 
 **Report Version:** `1.3.0`  
+**Report Version:** `1.4.0`  
 **Milestone:** `Milestone 1 — Foundation, Multi-Tenant Security, Authentication & Minimal Dashboard`  
 **Execution Date:** `2026-11-08`  
 **Architectural Contract:** `docs/ARCHITECTURE.md` v1.1.5  
@@ -9,6 +10,7 @@
 **Security Review Document:** `docs/MILESTONE_1_SECURITY_REVIEW.md`  
 **Governance Runtime:** `Gravitas Core Skill Mode (6 Invariants Enforced)`  
 **Implementation Verdict:** **SUCCESS — ALL GATES & VERIFICATION SUITES PASSED (74/74 TESTS)**
+**Implementation Verdict:** **SUCCESS — ALL GATES & VERIFICATION SUITES PASSED (90/90 TESTS)**
 
 ---
 
@@ -23,9 +25,12 @@ The delivered system establishes:
 4. **Categorized Explicit Grants (Zero Blanket Default DML):** Table privileges strictly partitioned into Categories A (tenant tables), B (read-only pricing catalogs), C (zero-table-access routing lookups), and D (application-guarded identity tables).
 5. **Interactive Tenant Isolation:** `TenantTransactionRunner` executing interactive PostgreSQL transactions with `SET LOCAL app.current_org_id` via parameterized `$queryRaw`, guarded by `FORCE ROW LEVEL SECURITY`.
 6. **Robust Authentication Foundation:** Argon2id password hashing, HTTP-only secure cookies, short-lived JWT access tokens, rotated refresh tokens with `FOR UPDATE` row locking, and automatic theft/reuse detection that immediately revokes compromised session families.
+6. **Robust Authentication Foundation:** Argon2id password hashing, HTTP-only secure cookies, short-lived JWT access tokens with validated startup enforcement, rotated refresh tokens with `FOR UPDATE` row locking, and automatic theft/reuse detection that immediately revokes compromised session families.
 7. **Organization Membership & Tenant Authorization:** `TenantGuard` verifying active workspace memberships and route parameter alignment on every tenant-scoped operation.
 8. **Minimal Authenticated Dashboard:** React 18+ Vite SPA with Tailwind CSS, React Hook Form, and TanStack Query featuring login, registration, workspace switching, live channel management, and single-flight refresh concurrency deduplication.
 9. **Comprehensive Verification Suite:** 74 automated tests (36 real PostgreSQL integration tests, 8 real HTTP CORS/CSRF TCP integration tests, and 30 unit tests) proving complete system correctness and multi-tenant security boundaries.
+8. **Minimal Authenticated Dashboard:** React 18+ Vite SPA with Tailwind CSS, React Hook Form, and TanStack Query featuring login, registration, workspace switching, live channel management, and cross-tab Web Locks single-flight refresh coordination.
+9. **Comprehensive Verification Suite:** 90 automated tests (36 real PostgreSQL integration tests, 10 real HTTP CORS/CSRF TCP integration tests, and 44 unit tests) proving complete system correctness and multi-tenant security boundaries.
 
 ---
 
@@ -163,6 +168,7 @@ The frontend application (`apps/web`) is built with React 18, Vite, Tailwind CSS
 ## 8. Real Execution Evidence & Test Results
 
 ### 8.1 Automated Test Suite Execution (74 Tests Across 6 Suites)
+### 8.1 Automated Test Suite Execution (90 Tests Across 8 Suites)
 
 ```bash
 $ npm test
@@ -176,11 +182,23 @@ $ npm test
  ✓ tests/integration/auth.spec.ts (11 tests) 1062ms
  ✓ tests/integration/security-pass.spec.ts (31 tests) 2134ms
  ✓ tests/integration/http-cors-csrf.spec.ts (8 tests) 6464ms
+ ✓ tests/unit/client-refresh.spec.ts (6 tests) 37ms
+ ✓ tests/unit/cross-tab-refresh.spec.ts (5 tests) 62ms
+ ✓ tests/integration/db-permissions.spec.ts (11 tests) 364ms
+ ✓ tests/integration/tenant-isolation.spec.ts (7 tests) 233ms
+ ✓ tests/unit/config-jwt.spec.ts (8 tests) 36ms
+ ✓ tests/integration/auth.spec.ts (11 tests) 910ms
+ ✓ tests/integration/security-pass.spec.ts (32 tests) 1668ms
+ ✓ tests/integration/http-cors-csrf.spec.ts (10 tests) 1542ms
 
  Test Files  6 passed (6)
       Tests  74 passed (74)
    Start at  18:29:18
    Duration  13.04s
+ Test Files  8 passed (8)
+      Tests  90 passed (90)
+   Start at  19:02:13
+   Duration  5.79s
 ```
 
 #### Detailed Test Taxonomy & Categorization:

@@ -1,8 +1,41 @@
 -- ==============================================================================
 -- PROJECT ORBIT — POSTGRESQL INITIAL ROLE PROVISIONING SCRIPT
+-- PROJECT ORBIT — POSTGRESQL LOCAL DEVELOPMENT ROLE PROVISIONING SCRIPT
+-- ==============================================================================
+--
+-- [SECURITY BOUNDARY NOTICE — LOCAL DEVELOPMENT & CI ONLY]
+-- This script is intended STRICTLY for local containerized development and CI.
+-- Production deployments MUST NEVER use this script.
+--
+-- In production and staging environments, PostgreSQL roles and credentials MUST
+-- be provisioned using cloud-managed IAM / Terraform infrastructure with
+-- independently generated and rotated secrets (e.g. AWS Secrets Manager, GCP Secret Manager).
 -- ==============================================================================
 
 -- 1. Create Non-Superuser Database Roles
+-- 1. Read Environment-Driven Role Credentials (psql \getenv)
+-- Allows docker-compose / CI to inject credentials dynamically.
+\getenv env_migrator_pass ORBIT_MIGRATOR_PASSWORD
+\getenv env_app_pass ORBIT_APP_PASSWORD
+\getenv env_ingress_pass ORBIT_INGRESS_PASSWORD
+
+-- Fallback to local development passwords ONLY if container environment variables are unset
+\if :{?env_migrator_pass}
+\else
+  \set env_migrator_pass 'orbit_migrator_pass'
+\endif
+
+\if :{?env_app_pass}
+\else
+  \set env_app_pass 'orbit_app_pass'
+\endif
+
+\if :{?env_ingress_pass}
+\else
+  \set env_ingress_pass 'orbit_ingress_pass'
+\endif
+
+-- 2. Create Non-Superuser Database Roles
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'orbit_migrator') THEN
@@ -37,12 +70,19 @@ BEGIN
 END $$;
 
 -- 2. Database Connection Privileges
+-- 3. Apply Environment-Driven Passwords Safely (psql literal interpolation prevents SQL injection)
+ALTER ROLE orbit_migrator WITH PASSWORD :'env_migrator_pass';
+ALTER ROLE orbit_app WITH PASSWORD :'env_app_pass';
+ALTER ROLE orbit_ingress WITH PASSWORD :'env_ingress_pass';
+
+-- 4. Database Connection Privileges
 REVOKE ALL ON DATABASE orbit_db FROM PUBLIC;
 GRANT CONNECT ON DATABASE orbit_db TO orbit_migrator;
 GRANT CONNECT ON DATABASE orbit_db TO orbit_app;
 GRANT CONNECT ON DATABASE orbit_db TO orbit_ingress;
 
 -- 3. Schema Ownership & Privileges
+-- 5. Schema Ownership & Privileges
 ALTER SCHEMA public OWNER TO orbit_migrator;
 GRANT USAGE, CREATE ON SCHEMA public TO orbit_migrator;
 GRANT USAGE ON SCHEMA public TO orbit_app;
@@ -53,14 +93,17 @@ REVOKE CREATE ON SCHEMA public FROM orbit_app;
 REVOKE CREATE ON SCHEMA public FROM orbit_ingress;
 
 -- 4. Enable Required Extensions
+-- 6. Enable Required Extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "btree_gist";
 CREATE EXTENSION IF NOT EXISTS "vector";
 
 -- 5. Sequences Default Privileges for orbit_app
+-- 7. Sequences Default Privileges for orbit_app
 ALTER DEFAULT PRIVILEGES FOR ROLE orbit_migrator IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO orbit_app;
 
 -- 6. Guarantee Zero Table/Sequence Access for orbit_ingress
+-- 8. Guarantee Zero Table/Sequence Access for orbit_ingress
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM orbit_ingress;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM orbit_ingress;
