@@ -88,6 +88,9 @@ jobs:
       - name: Run Prisma Database Migrations (Migrator Role)
         run: DATABASE_URL=$MIGRATION_DATABASE_URL npx prisma migrate deploy
 
+      - name: Seed Initial Database Records
+        run: npm run db:seed
+
       - name: TypeScript Typecheck (All Workspaces)
         run: npm run typecheck
 
