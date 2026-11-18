@@ -400,7 +400,7 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
 
     for (let trial = 1; trial <= totalTrials; trial++) {
       // Pause between trials to ensure all asynchronous promise resolutions and CDP events complete
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 300));
 
       // Clear access token before each trial to force 401
       await context.clearCookies({ name: 'access_token' });

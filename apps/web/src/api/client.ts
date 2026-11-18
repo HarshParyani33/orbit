@@ -594,7 +594,6 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
         navigator.locks &&
         typeof navigator.locks.request === 'function'
       ) {
-        const lockRequestStart = performance.now();
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), LOCK_TIMEOUT_MS);
 
@@ -605,20 +604,19 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
             async () => {
               clearTimeout(timeoutId);
 
-              // Check if another tab completed refresh while we were waiting for the lock
+              // 1. Immediate check: Check if sibling refresh completed and synchronized
               if (isSiblingRefreshValid(dispatchEpoch, queueCounter)) {
                 lastSuccessfulRefreshTime = performance.now();
                 return true;
               }
 
-              // Guard against Chromium cross-renderer localStorage IPC propagation delay
-              const waitedForLock = performance.now() - lockRequestStart > 10;
-              if (waitedForLock) {
-                await new Promise((resolve) => setTimeout(resolve, 25));
-                if (isSiblingRefreshValid(dispatchEpoch, queueCounter)) {
-                  lastSuccessfulRefreshTime = performance.now();
-                  return true;
-                }
+              // 2. Cross-renderer synchronization window:
+              // In multi-process Chromium, localStorage IPC between separate renderer processes has microsecond-to-millisecond latency.
+              // Yield briefly to event loop / IPC channel to absorb any in-flight sibling refresh completion before initiating network flight.
+              await new Promise((resolve) => setTimeout(resolve, 50));
+              if (isSiblingRefreshValid(dispatchEpoch, queueCounter)) {
+                lastSuccessfulRefreshTime = performance.now();
+                return true;
               }
 
               return await executeSingleFlightRefresh();
