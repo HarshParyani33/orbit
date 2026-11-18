@@ -10,7 +10,6 @@ export function configureApp(app: INestApplication): void {
   const config = getConfig();
 
   // 1. HTTP-Only Cookie Parser
-  app.use(cookieParser(process.env.COOKIE_SECRET));
   app.use(cookieParser(config.COOKIE_SECRET));
 
   // 2. Strict CORS Configuration
@@ -18,7 +17,6 @@ export function configureApp(app: INestApplication): void {
   // - Supports credentials (cookies)
   // - Whitelists explicitly required headers including X-Requested-With for CSRF defense
   app.enableCors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
     origin: config.FRONTEND_URL,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -31,4 +29,3 @@ export function configureApp(app: INestApplication): void {
     ],
   });
 }
-

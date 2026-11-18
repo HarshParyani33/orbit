@@ -6,10 +6,6 @@ import * as path from 'path';
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
-const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  PORT: z.coerce.number().default(4000),
-  FRONTEND_URL: z.string().url().default('http://localhost:5173'),
 const INSECURE_DEFAULT_SECRETS = new Set([
   'dev_jwt_secret_key_minimum_32_characters_for_security_testing',
   'dev_cookie_signing_secret_key_32_characters_long',
@@ -20,32 +16,20 @@ const INSECURE_DEFAULT_SECRETS = new Set([
   'jwt_secret',
 ]);
 
-  // Database URLs for specific roles
-  DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
-  MIGRATION_DATABASE_URL: z.string().optional(),
-  INGRESS_DATABASE_URL: z.string().optional(),
 export const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     PORT: z.coerce.number().default(4000),
     FRONTEND_URL: z.string().url().default('http://localhost:5173'),
 
-  // Redis
-  REDIS_URL: z.string().default('redis://localhost:6379'),
     // Database URLs for specific roles
     DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
     MIGRATION_DATABASE_URL: z.string().optional(),
     INGRESS_DATABASE_URL: z.string().optional(),
 
-  // JWT & Cryptographic Secrets
-  JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters'),
-  COOKIE_SECRET: z.string().min(16, 'COOKIE_SECRET must be at least 16 characters').optional(),
-  WIDGET_JWT_SECRET: z.string().optional(),
-});
     // Redis
     REDIS_URL: z.string().default('redis://localhost:6379'),
 
-export type EnvConfig = z.infer<typeof envSchema>;
     // JWT & Cryptographic Secrets
     JWT_SECRET: z.string().optional(),
     COOKIE_SECRET: z.string().optional(),
@@ -76,7 +60,7 @@ export type EnvConfig = z.infer<typeof envSchema>;
         });
       }
     } else {
-      // In development / test: if not provided, assign explicit development fallback
+      // In development / test: if not provided, assign explicit development default
       if (!data.JWT_SECRET || data.JWT_SECRET.trim().length === 0) {
         data.JWT_SECRET = 'dev_jwt_secret_key_minimum_32_characters_for_security_testing';
       }
@@ -128,15 +112,9 @@ export type EnvConfig = z.infer<typeof envSchema> & {
 
 let parsedConfig: EnvConfig | null = null;
 
-export function getConfig(): EnvConfig {
-  if (parsedConfig) return parsedConfig;
-
-  const result = envSchema.safeParse(process.env);
 export function validateConfig(rawEnv: Record<string, any>): EnvConfig {
   const result = envSchema.safeParse(rawEnv);
   if (!result.success) {
-    const issues = result.error.issues.map((i) => ` - ${i.path.join('.')}: ${i.message}`).join('\n');
-    // Report issues without printing actual secret values
     const issues = result.error.issues
       .map((i) => ` - ${i.path.join('.')}: ${i.message}`)
       .join('\n');
@@ -145,7 +123,6 @@ export function validateConfig(rawEnv: Record<string, any>): EnvConfig {
   return result.data as EnvConfig;
 }
 
-  parsedConfig = result.data;
 export function getConfig(customEnv?: Record<string, any>): EnvConfig {
   if (customEnv) {
     return validateConfig(customEnv);

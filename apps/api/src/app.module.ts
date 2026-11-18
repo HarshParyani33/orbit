@@ -17,9 +17,6 @@ import { ChannelsController } from './channels/channels.controller';
 
 @Module({
   imports: [
-    JwtModule.register({
-      secret: process.env.JWT_SECRET || 'dev_jwt_secret_key_minimum_32_characters_for_security_testing',
-      signOptions: { expiresIn: '15m' },
     JwtModule.registerAsync({
       useFactory: () => {
         const config = getConfig();

@@ -102,14 +102,9 @@ export function resetClientState(): void {
 }
 
 /**
- * Single-Flight Token Refresh Mechanism.
- * Ensures that multiple simultaneous API requests receiving 401 do not trigger
- * concurrent refresh operations, avoiding server-side token reuse / theft detection.
  * Executes the actual network refresh request.
  * Never exposes refresh tokens to JavaScript; uses ambient HTTP-only cookies.
  */
-export async function requestTokenRefresh(): Promise<boolean> {
-  // If a refresh operation is already in-flight, return the existing shared promise
 async function executeSingleFlightRefresh(): Promise<boolean> {
   try {
     const response = await fetch('/api/auth/refresh', {
@@ -198,14 +193,6 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
 
   refreshPromise = (async () => {
     try {
-      const response = await fetch('/api/auth/refresh', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest', // Satisfies CSRF custom header contract
-        },
-        credentials: 'include', // Sends HTTP-only refresh_token cookie
-      });
       // 1. Cross-tab coordination via Web Locks API when available
       if (
         typeof navigator !== 'undefined' &&
@@ -215,12 +202,6 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), LOCK_TIMEOUT_MS);
 
-      if (!response.ok) {
-        if (authFailureHandler) {
-          authFailureHandler();
-        }
-        return false;
-      }
         try {
           return await navigator.locks.request(
             LOCK_NAME,
@@ -228,9 +209,6 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
             async () => {
               clearTimeout(timeoutId);
 
-      const json: ApiResponse<any> = await response.json().catch(() => ({
-        success: false,
-      }));
               // Check if another tab completed refresh while we were waiting for the lock
               const storedRefresh = getStoredRefreshEpoch();
               if (dispatchEpoch && storedRefresh > dispatchEpoch) {
@@ -238,9 +216,6 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
                 return true;
               }
 
-      if (!json.success) {
-        if (authFailureHandler) {
-          authFailureHandler();
               // If a refresh succeeded very recently (< 1500ms), reuse the ambient cookie
               if (storedRefresh > 0 && Date.now() - storedRefresh < 1500) {
                 lastSuccessfulRefreshTime = performance.now();
@@ -256,21 +231,11 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
           // fall back to single-flight direct refresh
           return await executeSingleFlightRefresh();
         }
-        return false;
       }
 
-      // Record successful refresh timestamp for stale 401 interception
-      lastSuccessfulRefreshTime = performance.now();
-      return true;
-    } catch {
-      if (authFailureHandler) {
-        authFailureHandler();
-      }
-      return false;
       // 2. Fallback for environments without Web Locks API
       return await executeSingleFlightRefresh();
     } finally {
-      // Clear the in-flight promise once completed
       refreshPromise = null;
     }
   })();
@@ -308,7 +273,6 @@ export async function apiRequest<T>(
     credentials: 'include', // Includes HTTP-only cookies
   });
 
-  // Handle 401 Unauthorized with single-flight refresh interceptor
   // Handle 401 Unauthorized with cross-tab single-flight refresh interceptor
   const isAuthEndpoint =
     endpoint.includes('/api/auth/login') ||
@@ -317,9 +281,6 @@ export async function apiRequest<T>(
     endpoint.includes('/api/auth/logout');
 
   if (response.status === 401 && !options._retry && !isAuthEndpoint) {
-    // Edge-case protection: If a token refresh already succeeded while this request was in flight,
-    // the 401 response is stale. The updated credentials are already in the cookie jar.
-    // Retry immediately without initiating a redundant and potentially conflicting second refresh.
     // 1. In-tab monotonic stale 401 check
     if (lastSuccessfulRefreshTime > requestDispatchTime) {
       return apiRequest<T>(endpoint, {
@@ -328,8 +289,6 @@ export async function apiRequest<T>(
       });
     }
 
-    // Wait for the single-flight refresh operation
-    const refreshOk = await requestTokenRefresh();
     // 2. Cross-tab stale 401 check: did another tab already refresh after this request was sent?
     const storedRefresh = getStoredRefreshEpoch();
     if (storedRefresh > requestDispatchEpoch) {

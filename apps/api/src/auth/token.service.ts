@@ -6,7 +6,6 @@ import { getConfig } from '@orbit/config';
 
 @Injectable()
 export class TokenService {
-  constructor(@Inject(JwtService) private readonly jwtService: JwtService) {}
   private readonly jwtSecret: string;
 
   constructor(@Inject(JwtService) private readonly jwtService: JwtService) {
@@ -16,7 +15,6 @@ export class TokenService {
   generateAccessToken(payload: AuthSessionPayload): string {
     return this.jwtService.sign(payload, {
       expiresIn: '15m',
-      secret: process.env.JWT_SECRET,
       secret: this.jwtSecret,
     });
   }
@@ -32,7 +30,6 @@ export class TokenService {
 
   verifyAccessToken(token: string): AuthSessionPayload {
     return this.jwtService.verify<AuthSessionPayload>(token, {
-      secret: process.env.JWT_SECRET,
       secret: this.jwtSecret,
     });
   }
