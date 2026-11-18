@@ -20,6 +20,9 @@ import { CustomersService } from './customers/customers.service';
 import { CustomersController } from './customers/customers.controller';
 import { AiService } from './ai/ai.service';
 import { AiController } from './ai/ai.controller';
+import { WidgetService } from './widget/widget.service';
+import { WidgetController } from './widget/widget.controller';
+import { WidgetGuard } from './widget/widget.guard';
 import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
@@ -42,12 +45,14 @@ import { RealtimeModule } from './realtime/realtime.module';
     ConversationsController,
     CustomersController,
     AiController,
+    WidgetController,
   ],
   providers: [
     PrismaService,
     TokenService,
     AuthService,
     JwtAuthGuard,
+    WidgetGuard,
     CsrfGuard,
     {
       provide: APP_GUARD,
@@ -60,6 +65,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     ConversationsService,
     CustomersService,
     AiService,
+    WidgetService,
   ],
   exports: [
     PrismaService,
@@ -71,6 +77,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     ConversationsService,
     CustomersService,
     AiService,
+    WidgetService,
   ],
 })
 export class AppModule { }

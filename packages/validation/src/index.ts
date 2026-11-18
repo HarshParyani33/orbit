@@ -129,6 +129,22 @@ export const generateAiSuggestionSchema = z.object({
   conversationId: z.string().uuid('Invalid conversation ID'),
 });
 
+export const widgetSessionInitSchema = z.object({
+  channelId: z.string().uuid('Invalid channel ID'),
+  visitorId: z.string().uuid('Invalid visitor ID').optional(),
+  customerProfile: z
+    .object({
+      name: z.string().max(128).trim().optional(),
+      email: z.string().email().optional(),
+      phone: z.string().max(64).trim().optional(),
+    })
+    .optional(),
+});
+
+export const widgetSendMessageSchema = z.object({
+  content: z.string().min(1, 'Message cannot be empty').max(10000, 'Message too long').trim(),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type CreateOrganizationInput = z.infer<typeof createOrganizationSchema>;
@@ -147,3 +163,5 @@ export type LinkChannelIdentityInput = z.infer<typeof linkChannelIdentitySchema>
 export type MergeCustomersInput = z.infer<typeof mergeCustomersSchema>;
 export type CreateAiConfigInput = z.infer<typeof createAiConfigSchema>;
 export type GenerateAiSuggestionInput = z.infer<typeof generateAiSuggestionSchema>;
+export type WidgetSessionInitInput = z.infer<typeof widgetSessionInitSchema>;
+export type WidgetSendMessageInput = z.infer<typeof widgetSendMessageSchema>;

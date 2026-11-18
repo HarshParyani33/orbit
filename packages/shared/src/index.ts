@@ -133,6 +133,36 @@ export interface AuthSessionPayload {
   name: string;
 }
 
+export interface WidgetVisitorPayload {
+  sub: string; // visitorId
+  channelId: string;
+  orgId: string;
+  conversationId: string;
+  type: 'WIDGET_VISITOR';
+}
+
+export interface WidgetSessionInitResponse {
+  visitorToken: string;
+  visitorId: string;
+  conversationId: string;
+  channel: {
+    id: string;
+    name: string;
+    welcomeMessage?: string;
+    themeColor?: string;
+    allowedDomains?: string[];
+  };
+}
+
+export interface WidgetConversationResponse {
+  conversation: {
+    id: string;
+    status: string;
+    title: string | null;
+  };
+  messages: MessageSummary[];
+}
+
 export interface AuthTokenResponse {
   user: AuthenticatedUser;
   organizations: OrganizationSummary[];

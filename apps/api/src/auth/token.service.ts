@@ -1,21 +1,31 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as crypto from 'crypto';
-import { AuthSessionPayload } from '@orbit/shared';
+import { AuthSessionPayload, WidgetVisitorPayload } from '@orbit/shared';
 import { getConfig } from '@orbit/config';
 
 @Injectable()
 export class TokenService {
   private readonly jwtSecret: string;
+  private readonly widgetJwtSecret: string;
 
   constructor(@Inject(JwtService) private readonly jwtService: JwtService) {
-    this.jwtSecret = getConfig().JWT_SECRET;
+    const config = getConfig();
+    this.jwtSecret = config.JWT_SECRET;
+    this.widgetJwtSecret = config.WIDGET_JWT_SECRET || config.JWT_SECRET;
   }
 
   generateAccessToken(payload: AuthSessionPayload): string {
     return this.jwtService.sign(payload, {
       expiresIn: '15m',
       secret: this.jwtSecret,
+    });
+  }
+
+  generateWidgetToken(payload: WidgetVisitorPayload): string {
+    return this.jwtService.sign(payload, {
+      expiresIn: '7d',
+      secret: this.widgetJwtSecret,
     });
   }
 
@@ -32,5 +42,15 @@ export class TokenService {
     return this.jwtService.verify<AuthSessionPayload>(token, {
       secret: this.jwtSecret,
     });
+  }
+
+  verifyWidgetToken(token: string): WidgetVisitorPayload {
+    return this.jwtService.verify<WidgetVisitorPayload>(token, {
+      secret: this.widgetJwtSecret,
+    });
+  }
+
+  decodeToken(token: string): any {
+    return this.jwtService.decode(token);
   }
 }

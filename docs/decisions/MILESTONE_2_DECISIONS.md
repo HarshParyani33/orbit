@@ -170,6 +170,47 @@ This document records the architectural and engineering decisions for **Mileston
   - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `vite build` (build) exit code 0.
   - **GitHub Actions CI Verification:** [CI Run #44299625312](https://github.com/HarshParyani33/orbit/actions/runs/44299625312) completed with conclusion `success` across all 17 pipeline steps.
 
+---
+
+## Decision 28: Website Chat Widget Architecture, Ingress Security & Visitor Capability Separation (Milestone 2 Slice 2.6)
+- **Status:** APPROVED & IN IMPLEMENTATION
+- **Date:** 2026-11-18
+- **Context:**
+  Milestone 2 Slice 2.6 introduces the Website Chat Widget to Project Orbit, allowing businesses to embed an omnichannel customer chat interface on their websites.
+  Per `docs/ARCHITECTURE.md` Section 5.1 & Module 7, the architecture must establish:
+  1. A strict boundary between visitor capabilities and dashboard authentication.
+  2. Public channel resolution that respects PostgreSQL Row-Level Security without granting uncontrolled table access.
+  3. Cryptographically signed visitor session capabilities (`WIDGET_JWT_SECRET`).
+  4. Origin domain validation (`allowed_domains`) and rate-limiting abuse protection.
+  5. Persistent visitor session tracking across page reloads via client storage and `CustomerChannelIdentity`.
+  6. Bi-directional message exchange linked to the unified agent inbox with real-time WebSocket event emission.
+- **Architectural Specifications & Invariants:**
+  1. **Public Channel Ingress Resolution (`resolve_widget_channel`):**
+     - Channels are protected by PostgreSQL RLS for `orbit_app`. Anonymous website visitors have no initial tenant context.
+     - A narrow, security-definer function `resolve_widget_channel(p_channel_id UUID)` returns only `(channel_id, organization_id, channel_name, status, config)`.
+     - Validates that the channel exists, has `provider = 'WEB_CHAT'`, `status = 'ACTIVE'`, and `deleted_at IS NULL`.
+     - Owned by `orbit_migrator`; granted to `orbit_app`; strictly revoked from public.
+  2. **Visitor Capability Guard (`WidgetGuard`):**
+     - Validates tokens signed with `WIDGET_JWT_SECRET`.
+     - Enforces claim `{ type: 'WIDGET_VISITOR' }`.
+     - Rejects any visitor token attempting to access dashboard routes (`JwtAuthGuard` explicitly rejects `type: 'WIDGET_VISITOR'` with 403 Forbidden).
+     - Validates `Origin` header against `channel.config.allowed_domains` if configured.
+  3. **Visitor Identity Persistence & Session Continuity:**
+     - Client passes persistent `visitorId` (stored in browser `localStorage`).
+     - Session init idempotently matches `CustomerChannelIdentity` (`provider: 'WEB_CHAT'`, `externalId: visitorId`).
+     - Associates messages with the customer record inside `TenantTransactionRunner.runWithTenant(organizationId)`.
+  4. **Real-time Event Emission:**
+     - Customer messages sent through `POST /api/widget/message` emit `RealtimeGateway` events to the conversation room so human agents see incoming messages immediately.
+  5. **Embeddable Chat Client (`apps/widget`):**
+     - Self-contained, responsive chat widget exposing standard initialization and rendering hooks.
+- **Evidence & Verification:**
+  - Database Migration: `20261118000002_widget_channel_resolver` created `resolve_widget_channel(p_channel_id UUID)` security-definer function owned by `orbit_migrator` and granted to `orbit_app`.
+  - 13 comprehensive integration tests in `tests/integration/widget.spec.ts` covering session initialization, visitor persistence without duplicates, allowed domains enforcement, provider gating (rejecting WhatsApp channels), dashboard route isolation (403 Forbidden on JwtAuthGuard), bi-directional message exchange, status re-opening on incoming customer messages, and rate limit abuse protection.
+  - Full test suite: 188/188 tests passing across all 16 suites.
+  - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
+
+
+
 
 
 

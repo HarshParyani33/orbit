@@ -94,20 +94,23 @@ export const envSchema = z
     }
 
     // 3. WIDGET_JWT_SECRET Validation
-    if (isProd && data.WIDGET_JWT_SECRET) {
-      if (data.WIDGET_JWT_SECRET.length < 32) {
+    if (data.WIDGET_JWT_SECRET && data.WIDGET_JWT_SECRET.trim().length > 0) {
+      if (isProd && data.WIDGET_JWT_SECRET.length < 32) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['WIDGET_JWT_SECRET'],
           message: 'WIDGET_JWT_SECRET must be at least 32 characters long in production',
         });
       }
+    } else {
+      data.WIDGET_JWT_SECRET = data.JWT_SECRET || 'dev_widget_session_signing_secret_key_32_characters';
     }
   });
 
 export type EnvConfig = z.infer<typeof envSchema> & {
   JWT_SECRET: string;
   COOKIE_SECRET: string;
+  WIDGET_JWT_SECRET: string;
 };
 
 let parsedConfig: EnvConfig | null = null;

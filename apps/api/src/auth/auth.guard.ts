@@ -3,6 +3,7 @@ import {
   CanActivate,
   ExecutionContext,
   UnauthorizedException,
+  ForbiddenException,
   Inject,
 } from '@nestjs/common';
 import { TokenService } from './token.service';
@@ -30,6 +31,11 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     try {
+      const decoded: any = this.tokenService.decodeToken(token);
+      if (decoded?.type === 'WIDGET_VISITOR') {
+        throw new ForbiddenException('Widget visitor tokens cannot access dashboard routes');
+      }
+
       const payload = this.tokenService.verifyAccessToken(token);
       request.user = {
         id: payload.sub,
@@ -38,6 +44,9 @@ export class JwtAuthGuard implements CanActivate {
       };
       return true;
     } catch (err) {
+      if (err instanceof ForbiddenException) {
+        throw err;
+      }
       throw new UnauthorizedException('Authentication token expired or invalid');
     }
   }

@@ -87,8 +87,25 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         try {
           payload = this.jwtService.verify(token, { secret: config.JWT_SECRET });
         } catch (err: any) {
-          this.logger.warn(`[Socket ${socket.id}] Handshake rejected: Invalid JWT token - ${err.message}`);
-          return next(new Error('Invalid or expired token'));
+          // Fallback to WIDGET_JWT_SECRET if configured and separate
+          const widgetSecret = config.WIDGET_JWT_SECRET || config.JWT_SECRET;
+          try {
+            payload = this.jwtService.verify(token, { secret: widgetSecret });
+          } catch {
+            this.logger.warn(`[Socket ${socket.id}] Handshake rejected: Invalid JWT token - ${err.message}`);
+            return next(new Error('Invalid or expired token'));
+          }
+        }
+
+        // 3. Handle WIDGET_VISITOR tokens
+        if (payload.type === 'WIDGET_VISITOR') {
+          socket.data = {
+            visitorId: payload.sub,
+            organizationId: payload.orgId,
+            conversationId: payload.conversationId,
+            isVisitor: true,
+          };
+          return next();
         }
 
         const userId = payload.sub;
@@ -126,6 +143,19 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   async handleConnection(client: Socket) {
+    if (client.data?.isVisitor) {
+      if (client.data.conversationId) {
+        await client.join(`conv:${client.data.conversationId}`);
+        this.logger.log(`[Socket ${client.id}] Visitor ${client.data.visitorId} joined room conv:${client.data.conversationId}`);
+      }
+      client.emit('authenticated', {
+        visitorId: client.data.visitorId,
+        conversationId: client.data.conversationId,
+        isVisitor: true,
+      });
+      return;
+    }
+
     const orgId = client.data?.organizationId;
     if (orgId) {
       await client.join(`tenant:${orgId}`);
@@ -146,6 +176,11 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { organizationId: string }
   ) {
+    if (client.data?.isVisitor) {
+      client.emit('error', { message: 'Widget visitors cannot join tenant administrative rooms' });
+      return { error: 'Widget visitors cannot join tenant administrative rooms' };
+    }
+
     const userId = client.data?.userId;
     if (!userId) {
       return { error: 'Unauthenticated socket' };
@@ -187,6 +222,16 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { conversationId: string }
   ) {
+    if (client.data?.isVisitor) {
+      if (data?.conversationId !== client.data.conversationId) {
+        client.emit('error', { message: 'Unauthorized: Visitors can only join their assigned conversation room' });
+        return { error: 'Unauthorized: Visitors can only join their assigned conversation room' };
+      }
+      await client.join(`conv:${data.conversationId}`);
+      client.emit('conversation:joined', { conversationId: data.conversationId });
+      return { success: true, conversationId: data.conversationId };
+    }
+
     const userId = client.data?.userId;
     const organizationId = client.data?.organizationId;
 
