@@ -523,6 +523,204 @@ describe('Cross-Tab Refresh Token Coordination Tests', () => {
     }
   });
 
+  it('8d. priority stale refresh failure after relogin: stale ORBIT_REFRESH_FAILED from old session does not invalidate newly logged-in session', async () => {
+    // 1. Tab establishes active session at epoch 1000
+    setActiveUserId('user_A_id', 1000);
+    setStoredSessionCorrelation({
+      userId: 'user_A_id',
+      sessionEpoch: 1000,
+    });
+    setStoredRefreshStatus('success');
+
+    // 2. User logs out and re-authenticates with fresh session at epoch 2500
+    setActiveUserId('user_A_id', 2500);
+    setStoredSessionCorrelation({
+      userId: 'user_A_id',
+      sessionEpoch: 2500,
+    });
+    setStoredRefreshStatus('success');
+
+    let authFailureCalled = false;
+    setAuthFailureHandler(() => {
+      authFailureCalled = true;
+    });
+
+    // 3. Stale ORBIT_REFRESH_FAILED arrives from old session (epoch 1000 < current 2500)
+    const channel = getBroadcastChannel();
+    if (channel && channel.onmessage) {
+      channel.onmessage({
+        data: { type: 'ORBIT_REFRESH_FAILED', epoch: 1000, userId: 'user_A_id' },
+      } as MessageEvent);
+
+      // Invariant: Stale failure must be safely dropped without invalidating active session
+      expect(authFailureCalled).toBe(false);
+      expect(getActiveUserId()).toBe('user_A_id');
+      expect(getCurrentSessionEpoch()).toBe(2500);
+      expect(isTabSessionLoggedOut()).toBe(false);
+    }
+  });
+
+  it('8e. user identity mismatch: broadcast messages for user B do not invalidate or alter user A active session', async () => {
+    const activeEpoch = 5000;
+    setActiveUserId('user_A_id', activeEpoch);
+    setStoredSessionCorrelation({
+      userId: 'user_A_id',
+      sessionEpoch: activeEpoch,
+    });
+    setStoredRefreshStatus('success');
+
+    let authFailureCalled = false;
+    setAuthFailureHandler(() => {
+      authFailureCalled = true;
+    });
+
+    const channel = getBroadcastChannel();
+    if (channel && channel.onmessage) {
+      // Broadcast failure for a different user account (User B) even with a newer epoch
+      channel.onmessage({
+        data: { type: 'ORBIT_REFRESH_FAILED', epoch: 6000, userId: 'user_B_id' },
+      } as MessageEvent);
+
+      expect(authFailureCalled).toBe(false);
+      expect(getActiveUserId()).toBe('user_A_id');
+      expect(getCurrentSessionEpoch()).toBe(activeEpoch);
+      expect(isTabSessionLoggedOut()).toBe(false);
+
+      // Broadcast logout for User B
+      channel.onmessage({
+        data: { type: 'ORBIT_LOGOUT', epoch: 6000, userId: 'user_B_id' },
+      } as MessageEvent);
+
+      expect(authFailureCalled).toBe(false);
+      expect(getActiveUserId()).toBe('user_A_id');
+      expect(getCurrentSessionEpoch()).toBe(activeEpoch);
+      expect(isTabSessionLoggedOut()).toBe(false);
+    }
+  });
+
+  it('8f. out-of-order broadcast messages: older REFRESH_COMPLETE, REFRESH_FAILED, and LOGOUT messages are discarded without state corruption', async () => {
+    const activeEpoch = 7000;
+    setActiveUserId('user_A_id', activeEpoch);
+    setStoredSessionCorrelation({
+      userId: 'user_A_id',
+      sessionEpoch: activeEpoch,
+    });
+    setStoredRefreshStatus('success');
+
+    let authFailureCalled = false;
+    setAuthFailureHandler(() => {
+      authFailureCalled = true;
+    });
+
+    const channel = getBroadcastChannel();
+    if (channel && channel.onmessage) {
+      // Discard older REFRESH_COMPLETE
+      channel.onmessage({
+        data: { type: 'ORBIT_REFRESH_COMPLETE', epoch: 3000, counter: 1, userId: 'user_A_id' },
+      } as MessageEvent);
+
+      // Discard older REFRESH_FAILED
+      channel.onmessage({
+        data: { type: 'ORBIT_REFRESH_FAILED', epoch: 4000, userId: 'user_A_id' },
+      } as MessageEvent);
+
+      // Discard older LOGOUT
+      channel.onmessage({
+        data: { type: 'ORBIT_LOGOUT', epoch: 5000, userId: 'user_A_id' },
+      } as MessageEvent);
+
+      expect(authFailureCalled).toBe(false);
+      expect(getActiveUserId()).toBe('user_A_id');
+      expect(getCurrentSessionEpoch()).toBe(activeEpoch);
+      expect(isTabSessionLoggedOut()).toBe(false);
+    }
+  });
+
+  it('8g. current refresh failure: failure matching active session epoch properly marks logged out and invokes authFailureHandler', async () => {
+    const activeEpoch = 8000;
+    setActiveUserId('user_A_id', activeEpoch);
+    setStoredSessionCorrelation({
+      userId: 'user_A_id',
+      sessionEpoch: activeEpoch,
+    });
+    setStoredRefreshStatus('success');
+
+    let authFailureCalled = false;
+    setAuthFailureHandler(() => {
+      authFailureCalled = true;
+    });
+
+    const channel = getBroadcastChannel();
+    if (channel && channel.onmessage) {
+      // Current refresh failure matching active session epoch and user
+      channel.onmessage({
+        data: { type: 'ORBIT_REFRESH_FAILED', epoch: 8000, userId: 'user_A_id' },
+      } as MessageEvent);
+
+      expect(authFailureCalled).toBe(true);
+      expect(getActiveUserId()).toBeNull();
+      expect(getCurrentSessionEpoch()).toBe(0);
+      expect(isTabSessionLoggedOut()).toBe(true);
+    }
+  });
+
+  it('8h. in-flight refresh failure while tab establishes new login: tab does not overwrite own newer session state', async () => {
+    setActiveUserId('user_A_id', 1000);
+    setStoredSessionCorrelation({
+      userId: 'user_A_id',
+      sessionEpoch: 1000,
+    });
+    setStoredRefreshStatus('success');
+
+    let resolveFetch: any;
+    const fetchInitiated = new Promise<void>((done) => {
+      globalThis.fetch = vi.fn().mockImplementation((url: any) => {
+        if (typeof url === 'string' && url.includes('/api/auth/refresh')) {
+          return new Promise((resolve) => {
+            resolveFetch = resolve;
+            done();
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true }) });
+      });
+    });
+
+    let authFailureCalled = false;
+    setAuthFailureHandler(() => {
+      authFailureCalled = true;
+    });
+
+    // Start refresh under session epoch 1000
+    const refreshPromise = requestTokenRefresh();
+
+    // Wait until network request has actually entered flight
+    await fetchInitiated;
+
+    // While request is in-flight, user logs in establishing session epoch 3000
+    setActiveUserId('user_A_id', 3000);
+    setStoredSessionCorrelation({
+      userId: 'user_A_id',
+      sessionEpoch: 3000,
+    });
+    setStoredRefreshStatus('success');
+
+    // Now in-flight request fails with 401
+    resolveFetch({
+      ok: false,
+      status: 401,
+      json: async () => ({ success: false, error: { message: 'Token revoked' } }),
+    });
+
+    const result = await refreshPromise;
+    expect(result).toBe(false);
+
+    // Invariant: The new session at epoch 3000 must NOT be destroyed by the old in-flight failure!
+    expect(authFailureCalled).toBe(false);
+    expect(getActiveUserId()).toBe('user_A_id');
+    expect(getCurrentSessionEpoch()).toBe(3000);
+    expect(isTabSessionLoggedOut()).toBe(false);
+  });
+
   // ============================================================================
   // Formal Proof of localStorage Staged Election Race Flaw (Section 2 & 4)
   // ============================================================================

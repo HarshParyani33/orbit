@@ -264,6 +264,12 @@ Diagnostic execution of `python .agents/skills/gravitas/scripts/doctor.py` confi
   - **22.4 Account Switch & Web Locks Invariant Preservation:**
     - Preserve strict account-switch mismatch rejection: if `currentUserId` exists and differs from `correlation.userId`, fail closed immediately.
     - Web Locks API (`navigator.locks`) remains the sole authoritative cross-tab mutex with strict fail-closed safety when unavailable. Zero uncoordinated refreshes are permitted.
+  - **22.5 Originating Session Correlation for Failure Broadcasts and In-Flight Race Elimination:**
+    - Fixed race condition where `executeSingleFlightRefresh` and `requestTokenRefresh` posted `ORBIT_REFRESH_FAILED` with `epoch: Date.now()`, which caused stale failure broadcasts from pre-relogin sessions to be evaluated as newer than the fresh session epoch (`failureTimestamp > newSessionEpoch`), incorrectly invalidating the new session.
+    - Both `executeSingleFlightRefresh` and `requestTokenRefresh` now bind to `originatingEpoch` and `originatingUserId`. Failure broadcasts strictly carry the originating session epoch.
+    - Sibling tabs and the active tab drop any `ORBIT_REFRESH_FAILED`, `ORBIT_LOGOUT`, or `ORBIT_REFRESH_COMPLETE` if `msg.epoch < currentSessionEpoch` or `msg.userId !== currentUserId`.
+    - In-flight refresh execution checks if `currentSessionEpoch` moved forward or user switched before mutating in-memory or shared storage state on failure, preventing in-flight failures from killing superseding sessions.
+    - Added comprehensive Vitest regression tests (`tests/unit/cross-tab-refresh.spec.ts` tests 8d-8h) verifying Scenarios A-I.
 
 
 ---

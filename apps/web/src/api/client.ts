@@ -69,7 +69,13 @@ try {
 
       // STALE BROADCAST PROTECTION (Invariant 3D):
       // Ignore broadcast messages belonging to an older session generation than this tab's active session
-      if (currentSessionEpoch > 0 && msgEpoch > 0 && msgEpoch < currentSessionEpoch) {
+      if (currentSessionEpoch > 0 && msgEpoch < currentSessionEpoch) {
+        return;
+      }
+
+      // USER IDENTITY MISMATCH PROTECTION:
+      // If message is associated with a specific user, and current tab has a different active user, ignore it
+      if (msg.userId && currentUserId && msg.userId !== currentUserId) {
         return;
       }
 
@@ -90,6 +96,7 @@ try {
         msg.type === 'ORBIT_REFRESH_FAILED' ||
         msg.type === 'ORBIT_LOGOUT'
       ) {
+        const wasAuthenticated = currentSessionEpoch > 0 || currentUserId !== null || !isTabLoggedOut;
         isTabLoggedOut = true;
         currentUserId = null;
         currentOrgId = null;
@@ -97,7 +104,7 @@ try {
         lastSuccessfulRefreshTime = 0;
         lastBroadcastRefreshEpoch = 0;
         lastBroadcastRefreshCounter = 0;
-        if (authFailureHandler) {
+        if (wasAuthenticated && authFailureHandler) {
           authFailureHandler();
         }
       }
@@ -444,7 +451,10 @@ export function markLoggedOut(): void {
  * Executes the actual network refresh request.
  * Never exposes refresh tokens to JavaScript; uses ambient HTTP-only cookies.
  */
-async function executeSingleFlightRefresh(): Promise<boolean> {
+async function executeSingleFlightRefresh(
+  originatingEpoch = currentSessionEpoch,
+  originatingUserId = currentUserId
+): Promise<boolean> {
   try {
     const response = await fetch('/api/auth/refresh', {
       method: 'POST',
@@ -456,14 +466,30 @@ async function executeSingleFlightRefresh(): Promise<boolean> {
     });
 
     if (!response.ok) {
-      setStoredRefreshStatus('failed');
+      const correlation = getStoredSessionCorrelation();
+      if (!correlation || correlation.sessionEpoch <= originatingEpoch) {
+        setStoredRefreshStatus('failed');
+      }
       if (broadcastChannel) {
         try {
-          broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
+          broadcastChannel.postMessage({
+            type: 'ORBIT_REFRESH_FAILED',
+            epoch: originatingEpoch,
+            userId: originatingUserId,
+          });
         } catch { }
       }
-      if (authFailureHandler) {
-        authFailureHandler();
+      if (
+        currentSessionEpoch <= originatingEpoch &&
+        (!originatingUserId || currentUserId === originatingUserId)
+      ) {
+        isTabLoggedOut = true;
+        currentUserId = null;
+        currentOrgId = null;
+        currentSessionEpoch = 0;
+        if (authFailureHandler) {
+          authFailureHandler();
+        }
       }
       return false;
     }
@@ -473,14 +499,30 @@ async function executeSingleFlightRefresh(): Promise<boolean> {
     }));
 
     if (!json.success) {
-      setStoredRefreshStatus('failed');
+      const correlation = getStoredSessionCorrelation();
+      if (!correlation || correlation.sessionEpoch <= originatingEpoch) {
+        setStoredRefreshStatus('failed');
+      }
       if (broadcastChannel) {
         try {
-          broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
+          broadcastChannel.postMessage({
+            type: 'ORBIT_REFRESH_FAILED',
+            epoch: originatingEpoch,
+            userId: originatingUserId,
+          });
         } catch { }
       }
-      if (authFailureHandler) {
-        authFailureHandler();
+      if (
+        currentSessionEpoch <= originatingEpoch &&
+        (!originatingUserId || currentUserId === originatingUserId)
+      ) {
+        isTabLoggedOut = true;
+        currentUserId = null;
+        currentOrgId = null;
+        currentSessionEpoch = 0;
+        if (authFailureHandler) {
+          authFailureHandler();
+        }
       }
       return false;
     }
@@ -493,12 +535,17 @@ async function executeSingleFlightRefresh(): Promise<boolean> {
 
     // Correlate active user session
     if (json.data?.user?.id) {
-      currentUserId = json.data.user.id;
-      currentSessionEpoch = nowEpoch;
-      setStoredSessionCorrelation({
-        userId: json.data.user.id,
-        sessionEpoch: nowEpoch,
-      });
+      if (
+        currentSessionEpoch <= originatingEpoch &&
+        (!originatingUserId || currentUserId === originatingUserId)
+      ) {
+        currentUserId = json.data.user.id;
+        currentSessionEpoch = nowEpoch;
+        setStoredSessionCorrelation({
+          userId: json.data.user.id,
+          sessionEpoch: nowEpoch,
+        });
+      }
     }
 
     // Monotonic performance time for in-tab stale 401 interception
@@ -518,14 +565,30 @@ async function executeSingleFlightRefresh(): Promise<boolean> {
 
     return true;
   } catch {
-    setStoredRefreshStatus('failed');
+    const correlation = getStoredSessionCorrelation();
+    if (!correlation || correlation.sessionEpoch <= originatingEpoch) {
+      setStoredRefreshStatus('failed');
+    }
     if (broadcastChannel) {
       try {
-        broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
+        broadcastChannel.postMessage({
+          type: 'ORBIT_REFRESH_FAILED',
+          epoch: originatingEpoch,
+          userId: originatingUserId,
+        });
       } catch { }
     }
-    if (authFailureHandler) {
-      authFailureHandler();
+    if (
+      currentSessionEpoch <= originatingEpoch &&
+      (!originatingUserId || currentUserId === originatingUserId)
+    ) {
+      isTabLoggedOut = true;
+      currentUserId = null;
+      currentOrgId = null;
+      currentSessionEpoch = 0;
+      if (authFailureHandler) {
+        authFailureHandler();
+      }
     }
     return false;
   }
@@ -584,6 +647,8 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
     return refreshPromise;
   }
 
+  const originatingEpoch = currentSessionEpoch;
+  const originatingUserId = currentUserId;
   const queueCounter = getStoredRefreshCounter();
 
   refreshPromise = (async () => {
@@ -619,7 +684,7 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
                 return true;
               }
 
-              return await executeSingleFlightRefresh();
+              return await executeSingleFlightRefresh(originatingEpoch, originatingUserId);
             }
           );
         } catch {
@@ -634,14 +699,30 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
           }
 
           // If no sibling tab completed a valid refresh, fail closed safely.
-          setStoredRefreshStatus('failed');
+          const correlation = getStoredSessionCorrelation();
+          if (!correlation || correlation.sessionEpoch <= originatingEpoch) {
+            setStoredRefreshStatus('failed');
+          }
           if (broadcastChannel) {
             try {
-              broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
+              broadcastChannel.postMessage({
+                type: 'ORBIT_REFRESH_FAILED',
+                epoch: originatingEpoch,
+                userId: originatingUserId,
+              });
             } catch { }
           }
-          if (authFailureHandler) {
-            authFailureHandler();
+          if (
+            currentSessionEpoch <= originatingEpoch &&
+            (!originatingUserId || currentUserId === originatingUserId)
+          ) {
+            isTabLoggedOut = true;
+            currentUserId = null;
+            currentOrgId = null;
+            currentSessionEpoch = 0;
+            if (authFailureHandler) {
+              authFailureHandler();
+            }
           }
           return false;
         }
@@ -654,14 +735,30 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
       console.warn(
         '[Orbit Auth] Web Locks API (navigator.locks) is unavailable. Failing closed safely to prevent uncoordinated multi-tab token rotation.'
       );
-      setStoredRefreshStatus('failed');
+      const correlation = getStoredSessionCorrelation();
+      if (!correlation || correlation.sessionEpoch <= originatingEpoch) {
+        setStoredRefreshStatus('failed');
+      }
       if (broadcastChannel) {
         try {
-          broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
+          broadcastChannel.postMessage({
+            type: 'ORBIT_REFRESH_FAILED',
+            epoch: originatingEpoch,
+            userId: originatingUserId,
+          });
         } catch { }
       }
-      if (authFailureHandler) {
-        authFailureHandler();
+      if (
+        currentSessionEpoch <= originatingEpoch &&
+        (!originatingUserId || currentUserId === originatingUserId)
+      ) {
+        isTabLoggedOut = true;
+        currentUserId = null;
+        currentOrgId = null;
+        currentSessionEpoch = 0;
+        if (authFailureHandler) {
+          authFailureHandler();
+        }
       }
       return false;
     } finally {
