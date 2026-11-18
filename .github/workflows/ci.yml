@@ -1,0 +1,107 @@
+name: Project Orbit — CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build, Audit & Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      NODE_ENV: test
+      PORT: 4000
+      FRONTEND_URL: http://localhost:5173
+      POSTGRES_DB: orbit_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_ci_password
+      ORBIT_APP_PASSWORD: orbit_app_pass
+      ORBIT_MIGRATOR_PASSWORD: orbit_migrator_pass
+      ORBIT_INGRESS_PASSWORD: orbit_ingress_pass
+      DATABASE_URL: postgresql://orbit_app:orbit_app_pass@127.0.0.1:5432/orbit_db?schema=public
+      MIGRATION_DATABASE_URL: postgresql://orbit_migrator:orbit_migrator_pass@127.0.0.1:5432/orbit_db?schema=public
+      INGRESS_DATABASE_URL: postgresql://orbit_ingress:orbit_ingress_pass@127.0.0.1:5432/orbit_db?schema=public
+      REDIS_URL: redis://127.0.0.1:6379
+      JWT_SECRET: dev_jwt_secret_key_minimum_32_characters_for_security_testing
+      COOKIE_SECRET: dev_cookie_signing_secret_key_32_characters_long
+      WIDGET_JWT_SECRET: dev_widget_session_signing_secret_key_32_characters
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: orbit_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium with System Dependencies
+        run: npx playwright install chromium --with-deps
+
+      - name: Install PostgreSQL Client Tools
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Provision PostgreSQL Roles & Permissions
+        run: |
+          PGPASSWORD=postgres_ci_password psql -h 127.0.0.1 -U postgres -d orbit_db -v ON_ERROR_STOP=1 -f docker/postgres/init-roles.sql
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Run Prisma Database Migrations (Migrator Role)
+        run: DATABASE_URL=$MIGRATION_DATABASE_URL npx prisma migrate deploy
+
+      - name: TypeScript Typecheck (All Workspaces)
+        run: npm run typecheck
+
+      - name: ESLint Code Quality Gate (All Workspaces)
+        run: npm run lint
+
+      - name: Production Build (All Workspaces)
+        run: npm run build
+
+      - name: Run Unit Tests
+        run: npm run test:unit
+
+      - name: Run Database Integration & Security Tests
+        run: npm run test:integration
+
+      - name: Run Real Multi-Tab Browser Tests (Headless Chromium)
+        run: npm run test:browser

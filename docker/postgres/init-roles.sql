@@ -11,6 +11,9 @@
 -- independently generated and rotated secrets (e.g. AWS Secrets Manager, GCP Secret Manager).
 -- ==============================================================================
 
+-- Fail immediately upon any error
+\set ON_ERROR_STOP on
+
 -- 1. Read Environment-Driven Role Credentials (psql \getenv)
 -- Allows docker-compose / CI to inject credentials dynamically.
 \getenv env_node_env NODE_ENV
@@ -19,6 +22,11 @@
 \getenv env_ingress_pass ORBIT_INGRESS_PASSWORD
 
 -- Fallback to local development passwords ONLY if container environment variables are unset
+\if :{?env_node_env}
+\else
+  \set env_node_env 'development'
+\endif
+
 \if :{?env_migrator_pass}
 \else
   \set env_migrator_pass 'orbit_migrator_pass'
@@ -34,14 +42,20 @@
   \set env_ingress_pass 'orbit_ingress_pass'
 \endif
 
+-- Store parameters into session configuration settings for safe SQL/PLpgSQL inspection
+SELECT set_config('orbit.env_node_env', :'env_node_env', false);
+SELECT set_config('orbit.env_migrator_pass', :'env_migrator_pass', false);
+SELECT set_config('orbit.env_app_pass', :'env_app_pass', false);
+SELECT set_config('orbit.env_ingress_pass', :'env_ingress_pass', false);
+
 -- 1b. Strict Environment Boundary Enforcement:
 -- If NODE_ENV is set to production or staging, default development passwords MUST NOT be used!
 DO $$
 DECLARE
-  v_node_env text := NULLIF(:'env_node_env', '');
-  v_migrator_pass text := :'env_migrator_pass';
-  v_app_pass text := :'env_app_pass';
-  v_ingress_pass text := :'env_ingress_pass';
+  v_node_env text := NULLIF(current_setting('orbit.env_node_env', true), '');
+  v_migrator_pass text := current_setting('orbit.env_migrator_pass', true);
+  v_app_pass text := current_setting('orbit.env_app_pass', true);
+  v_ingress_pass text := current_setting('orbit.env_ingress_pass', true);
 BEGIN
   IF v_node_env IN ('production', 'staging') THEN
     IF v_migrator_pass = 'orbit_migrator_pass' OR v_app_pass = 'orbit_app_pass' OR v_ingress_pass = 'orbit_ingress_pass' THEN
@@ -49,6 +63,12 @@ BEGIN
     END IF;
   END IF;
 END $$;
+
+-- Clean up session parameters to prevent memory or setting retention
+SELECT set_config('orbit.env_node_env', '', false);
+SELECT set_config('orbit.env_migrator_pass', '', false);
+SELECT set_config('orbit.env_app_pass', '', false);
+SELECT set_config('orbit.env_ingress_pass', '', false);
 
 -- 2. Create Non-Superuser Database Roles (Without hardcoded passwords)
 DO $$

@@ -5,6 +5,7 @@ let currentUserId: string | null = null;
 let refreshPromise: Promise<boolean> | null = null;
 let authFailureHandler: (() => void) | null = null;
 let lastSuccessfulRefreshTime = 0;
+let isTabLoggedOut = false;
 
 // Shared Storage & Web Lock Constants for Cross-Tab Coordination
 const STORAGE_KEY_LAST_REFRESH = 'orbit_auth_last_refresh_epoch';
@@ -56,6 +57,7 @@ try {
         event.data?.type === 'ORBIT_REFRESH_FAILED' ||
         event.data?.type === 'ORBIT_LOGOUT'
       ) {
+        isTabLoggedOut = true;
         currentUserId = null;
         currentOrgId = null;
         lastSuccessfulRefreshTime = 0;
@@ -79,10 +81,17 @@ export function getActiveOrgId(): string | null {
 
 export function setActiveUserId(userId: string | null) {
   currentUserId = userId;
+  if (userId) {
+    isTabLoggedOut = false;
+  }
 }
 
 export function getActiveUserId(): string | null {
   return currentUserId;
+}
+
+export function isTabSessionLoggedOut(): boolean {
+  return isTabLoggedOut;
 }
 
 export function setAuthFailureHandler(handler: () => void) {
@@ -199,22 +208,49 @@ export function incrementStoredRefreshCounter(): number {
 /**
  * Validates whether a sibling tab's refresh completion is valid and matches the current session.
  * Prevents cross-session credential contamination after account switch or logout.
+ * Sibling refresh reuse is strictly conditional on valid session correlation and forward progress.
  */
-export function isSiblingRefreshValid(dispatchEpoch?: number): boolean {
+export function isSiblingRefreshValid(
+  dispatchEpoch?: number,
+  queueCounter?: number
+): boolean {
   const storedRefresh = getStoredRefreshEpoch();
   const storedStatus = getStoredRefreshStatus();
 
-  if (!dispatchEpoch || storedRefresh <= dispatchEpoch || storedStatus !== 'success') {
+  // 1. Must have explicit success status (not 'failed', not 'logged_out', not null)
+  if (storedStatus !== 'success') {
     return false;
   }
 
-  // If current tab is associated with a specific user, verify session correlation
-  if (currentUserId) {
-    const correlation = getStoredSessionCorrelation();
-    if (!correlation || correlation.userId !== currentUserId) {
-      // Sibling refresh was performed by a different user or session identity was cleared
-      return false;
-    }
+  // 2. Must demonstrate verified forward progress (timing epoch or monotonic counter)
+  const hasTimingProgress = dispatchEpoch ? storedRefresh > dispatchEpoch : false;
+  const hasCounterProgress =
+    queueCounter !== undefined ? getStoredRefreshCounter() > queueCounter : false;
+
+  if (!hasTimingProgress && !hasCounterProgress) {
+    return false;
+  }
+
+  // 3. Must have valid session correlation (identity must exist)
+  const correlation = getStoredSessionCorrelation();
+  if (!correlation || !correlation.userId) {
+    return false;
+  }
+
+  // 4. If current tab is associated with an active user, the refreshed session MUST match that exact user
+  if (currentUserId && correlation.userId !== currentUserId) {
+    // Sibling refresh belongs to a different user account (e.g. account switch in another tab)
+    return false;
+  }
+
+  // Never adopt a sibling session if this tab has been logged out
+  if (isTabLoggedOut) {
+    return false;
+  }
+
+  // If current tab was unauthenticated, adopt the verified active session identity
+  if (!currentUserId && correlation.userId) {
+    currentUserId = correlation.userId;
   }
 
   return true;
@@ -226,6 +262,7 @@ export function resetClientState(): void {
   refreshPromise = null;
   authFailureHandler = null;
   lastSuccessfulRefreshTime = 0;
+  isTabLoggedOut = false;
   memoryStorage = {};
   try {
     const storage = getLocalStorage();
@@ -247,6 +284,7 @@ export function resetClientState(): void {
 
 export function markLoggedOut(): void {
   resetClientState();
+  isTabLoggedOut = true;
   setStoredRefreshStatus('logged_out');
   if (broadcastChannel) {
     try {
@@ -355,12 +393,24 @@ async function executeSingleFlightRefresh(): Promise<boolean> {
  * Rather than risking concurrent refresh requests and session family theft revocation, the client fails closed safely.
  */
 export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boolean> {
-  // If user has explicitly logged out, reject immediately
-  if (getStoredRefreshStatus() === 'logged_out') {
+  // If user has explicitly logged out, or this tab received a cross-tab logout, reject immediately
+  if (isTabLoggedOut || getStoredRefreshStatus() === 'logged_out') {
     if (authFailureHandler) {
       authFailureHandler();
     }
     return false;
+  }
+
+  // Account switch guard: if this tab is associated with user A, but active session belongs to user B
+  if (currentUserId) {
+    const correlation = getStoredSessionCorrelation();
+    if (correlation && correlation.userId !== currentUserId) {
+      isTabLoggedOut = true;
+      if (authFailureHandler) {
+        authFailureHandler();
+      }
+      return false;
+    }
   }
 
   // If a refresh operation is already in-flight in THIS execution context, return existing promise
@@ -389,10 +439,7 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
               clearTimeout(timeoutId);
 
               // Check if another tab completed refresh while we were waiting for the lock
-              if (
-                getStoredRefreshCounter() > queueCounter ||
-                isSiblingRefreshValid(dispatchEpoch)
-              ) {
+              if (isSiblingRefreshValid(dispatchEpoch, queueCounter)) {
                 lastSuccessfulRefreshTime = performance.now();
                 return true;
               }
@@ -406,10 +453,7 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
           // DO NOT execute an uncoordinated direct refresh, as doing so bypasses mutual exclusion
           // and risks concurrent token rotation and session family theft revocation.
           // First, check whether another tab successfully completed refresh in the interim:
-          if (
-            getStoredRefreshCounter() > queueCounter ||
-            isSiblingRefreshValid(dispatchEpoch)
-          ) {
+          if (isSiblingRefreshValid(dispatchEpoch, queueCounter)) {
             lastSuccessfulRefreshTime = performance.now();
             return true;
           }
@@ -498,7 +542,27 @@ export async function apiRequest<T>(
     endpoint.includes('/api/auth/refresh') ||
     endpoint.includes('/api/auth/logout');
 
+  // If this tab was invalidated by logout, fail closed immediately on protected resources
+  if (isTabLoggedOut && !isAuthEndpoint) {
+    if (authFailureHandler) {
+      authFailureHandler();
+    }
+    throw new Error('Session expired or revoked. Please log in again.');
+  }
+
   if (response.status === 401 && !options._retry && !isAuthEndpoint) {
+    // 0. Account switch check: if this tab belongs to user A, but active session was switched to user B
+    if (currentUserId) {
+      const correlation = getStoredSessionCorrelation();
+      if (correlation && correlation.userId !== currentUserId) {
+        isTabLoggedOut = true;
+        if (authFailureHandler) {
+          authFailureHandler();
+        }
+        throw new Error('Session expired or revoked. Please log in again.');
+      }
+    }
+
     // 1. In-tab monotonic stale 401 check
     if (lastSuccessfulRefreshTime > requestDispatchTime) {
       return apiRequest<T>(endpoint, {
@@ -508,10 +572,7 @@ export async function apiRequest<T>(
     }
 
     // 2. Cross-tab stale 401 check: did another tab already refresh after this request was sent?
-    if (
-      getStoredRefreshCounter() > requestCounter ||
-      isSiblingRefreshValid(requestDispatchEpoch)
-    ) {
+    if (isSiblingRefreshValid(requestDispatchEpoch, requestCounter)) {
       lastSuccessfulRefreshTime = performance.now();
       return apiRequest<T>(endpoint, {
         ...options,
@@ -545,6 +606,27 @@ export async function apiRequest<T>(
   if (!response.ok || !json.success) {
     const errorMsg = json.error?.message || `HTTP ${response.status}: Request failed`;
     throw new Error(errorMsg);
+  }
+
+  // Automatically sync session correlation on successful authentication operations
+  if (endpoint.includes('/api/auth/login') || endpoint.includes('/api/auth/register')) {
+    isTabLoggedOut = false;
+    const user = (json.data as any)?.user;
+    if (user?.id) {
+      currentUserId = user.id;
+      const nowEpoch = Date.now();
+      setStoredRefreshEpoch(nowEpoch);
+      setStoredRefreshStatus('success');
+      incrementStoredRefreshCounter();
+      setStoredSessionCorrelation({
+        userId: user.id,
+        sessionEpoch: nowEpoch,
+      });
+    }
+  }
+
+  if (endpoint.includes('/api/auth/logout')) {
+    markLoggedOut();
   }
 
   return json.data as T;

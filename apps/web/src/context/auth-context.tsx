@@ -1,6 +1,12 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { AuthenticatedUser, OrganizationSummary } from '@orbit/shared';
-import { apiRequest, setActiveOrgId as setClientOrgId, setAuthFailureHandler } from '../api/client';
+import {
+  apiRequest,
+  setActiveOrgId as setClientOrgId,
+  setActiveUserId as setClientUserId,
+  setAuthFailureHandler,
+  markLoggedOut,
+} from '../api/client';
 import { LoginInput, RegisterInput } from '@orbit/validation';
 
 interface AuthContextType {
@@ -41,6 +47,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }>('/api/auth/me');
 
       setUser(data.user);
+      setClientUserId(data.user.id);
       setOrganizations(data.organizations);
 
       const savedOrgId = localStorage.getItem('orbit_active_org_id');
@@ -56,6 +63,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } catch (err) {
       setUser(null);
+      setClientUserId(null);
       setOrganizations([]);
       setActiveOrg(null);
       setClientOrgId(null);
@@ -67,6 +75,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     setAuthFailureHandler(() => {
       setUser(null);
+      setClientUserId(null);
       setOrganizations([]);
       setActiveOrg(null);
       setClientOrgId(null);
@@ -87,11 +96,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
 
     setUser(data.user);
+    setClientUserId(data.user.id);
     setOrganizations(data.organizations);
     const targetOrg = data.organizations.find((o) => o.id === data.activeOrgId) || data.organizations[0] || null;
     setActiveOrg(targetOrg);
     if (targetOrg) {
       setClientOrgId(targetOrg.id);
+      localStorage.setItem('orbit_active_org_id', targetOrg.id);
     }
   };
 
@@ -106,11 +117,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
 
     setUser(data.user);
+    setClientUserId(data.user.id);
     setOrganizations(data.organizations);
     const targetOrg = data.organizations[0] || null;
     setActiveOrg(targetOrg);
     if (targetOrg) {
       setClientOrgId(targetOrg.id);
+      localStorage.setItem('orbit_active_org_id', targetOrg.id);
     }
   };
 
@@ -118,7 +131,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       await apiRequest('/api/auth/logout', { method: 'POST' });
     } finally {
+      markLoggedOut();
       setUser(null);
+      setClientUserId(null);
       setOrganizations([]);
       setActiveOrg(null);
       setClientOrgId(null);

@@ -126,6 +126,10 @@ describe('Cross-Tab Refresh Token Coordination Tests', () => {
     const refreshEpoch = Date.now() - 50;
     setStoredRefreshEpoch(refreshEpoch);
     setStoredRefreshStatus('success');
+    setStoredSessionCorrelation({
+      userId: 'u1',
+      sessionEpoch: refreshEpoch,
+    });
 
     globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
       if (url === '/api/auth/refresh') {
@@ -224,6 +228,10 @@ describe('Cross-Tab Refresh Token Coordination Tests', () => {
     const siblingRefreshEpoch = Date.now() - 100;
     setStoredRefreshEpoch(siblingRefreshEpoch);
     setStoredRefreshStatus('success');
+    setStoredSessionCorrelation({
+      userId: 'u1',
+      sessionEpoch: siblingRefreshEpoch,
+    });
 
     const lockSpy = vi
       .spyOn(navigator.locks, 'request')

@@ -362,9 +362,28 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
     );
 
     const orgId = regResult.organizations[0].id;
-    await page1.evaluate((id: string) => OrbitClient.setActiveOrgId(id), orgId);
-    await page2.evaluate((id: string) => OrbitClient.setActiveOrgId(id), orgId);
-    await page3.evaluate((id: string) => OrbitClient.setActiveOrgId(id), orgId);
+    const userId = regResult.user.id;
+    await page1.evaluate(
+      ({ id, uId }: any) => {
+        OrbitClient.setActiveOrgId(id);
+        OrbitClient.setActiveUserId(uId);
+      },
+      { id: orgId, uId: userId }
+    );
+    await page2.evaluate(
+      ({ id, uId }: any) => {
+        OrbitClient.setActiveOrgId(id);
+        OrbitClient.setActiveUserId(uId);
+      },
+      { id: orgId, uId: userId }
+    );
+    await page3.evaluate(
+      ({ id, uId }: any) => {
+        OrbitClient.setActiveOrgId(id);
+        OrbitClient.setActiveUserId(uId);
+      },
+      { id: orgId, uId: userId }
+    );
 
     // Run 10 consecutive trials of simultaneous 3-tab 401 refresh cycles
     const totalTrials = 10;
@@ -380,8 +399,8 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
     page3.on('request', countReq);
 
     for (let trial = 1; trial <= totalTrials; trial++) {
-      // Pause between trials to ensure all asynchronous promise resolutions complete
-      await new Promise((r) => setTimeout(r, 60));
+      // Pause between trials to ensure all asynchronous promise resolutions and CDP events complete
+      await new Promise((r) => setTimeout(r, 150));
 
       // Clear access token before each trial to force 401
       await context.clearCookies({ name: 'access_token' });
@@ -469,6 +488,142 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
     // Invariant: Browser engine automatically releases lock on page closure; Page 2 acquires lock and recovers!
     const page2Result = await page2Promise;
     expect(Array.isArray(page2Result)).toBe(true);
+
+    await context.close();
+  }, 30000);
+
+  it('Scenario 6: Real Browser Cross-Tab Account Switch Invariant — Stale tab does not reuse new user credentials', async () => {
+    const context: BrowserContext = await browser.newContext();
+    const emailA = `browser_userA_${Date.now()}@example.com`;
+    const emailB = `browser_userB_${Date.now()}@example.com`;
+
+    const page1 = await context.newPage();
+    const page2 = await context.newPage();
+
+    await page1.goto(`${baseUrl}/test.html`);
+    await page2.goto(`${baseUrl}/test.html`);
+
+    // Tab 1 registers and logs in as User A
+    const regA = await page1.evaluate(
+      async ({ email }) => {
+        return await OrbitClient.apiRequest('/api/auth/register', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: 'User A',
+            email,
+            password: 'Password123!',
+            organizationName: 'Org A',
+          }),
+        });
+      },
+      { email: emailA }
+    );
+
+    // Tab 2 adopts User A
+    await page2.evaluate(
+      ({ userId, orgId }: any) => {
+        OrbitClient.setActiveUserId(userId);
+        OrbitClient.setActiveOrgId(orgId);
+      },
+      { userId: regA.user.id, orgId: regA.organizations[0].id }
+    );
+
+    // Tab 1 logs out and registers as User B
+    await page1.evaluate(async () => {
+      await OrbitClient.apiRequest('/api/auth/logout', { method: 'POST' });
+    });
+
+    const regB = await page1.evaluate(
+      async ({ email }) => {
+        return await OrbitClient.apiRequest('/api/auth/register', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: 'User B',
+            email,
+            password: 'Password123!',
+            organizationName: 'Org B',
+          }),
+        });
+      },
+      { email: emailB }
+    );
+
+    expect(regB.user.id).not.toBe(regA.user.id);
+
+    // Now in Tab 2 (which is still configured with User A's identity):
+    // Force a 401 by clearing access token
+    await context.clearCookies({ name: 'access_token' });
+
+    // Tab 2 makes a request:
+    // Invariant: Tab 2 MUST NOT reuse User B's rotated session! Tab 2 must fail closed safely!
+    const tab2Result = await page2.evaluate(async () => {
+      try {
+        await OrbitClient.apiRequest('/api/organizations');
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message };
+      }
+    });
+
+    expect(tab2Result.success).toBe(false);
+    expect(tab2Result.error).toMatch(/Session expired or revoked/i);
+
+    await context.close();
+  }, 30000);
+
+  it('Scenario 7: Real Browser Cross-Tab Logout Propagation — Logout in Tab 1 immediately invalidates Tab 2', async () => {
+    const context: BrowserContext = await browser.newContext();
+    const testEmail = `browser_logout_${Date.now()}@example.com`;
+
+    const page1 = await context.newPage();
+    const page2 = await context.newPage();
+
+    await page1.goto(`${baseUrl}/test.html`);
+    await page2.goto(`${baseUrl}/test.html`);
+
+    const reg = await page1.evaluate(
+      async ({ email }) => {
+        return await OrbitClient.apiRequest('/api/auth/register', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: 'Logout User',
+            email,
+            password: 'Password123!',
+            organizationName: 'Logout Org',
+          }),
+        });
+      },
+      { email: testEmail }
+    );
+
+    await page2.evaluate(
+      ({ userId, orgId }: any) => {
+        OrbitClient.setActiveUserId(userId);
+        OrbitClient.setActiveOrgId(orgId);
+      },
+      { userId: reg.user.id, orgId: reg.organizations[0].id }
+    );
+
+    // Tab 1 logs out
+    await page1.evaluate(async () => {
+      await OrbitClient.apiRequest('/api/auth/logout', { method: 'POST' });
+    });
+
+    // Give broadcast channel 60ms to deliver event
+    await new Promise((r) => setTimeout(r, 60));
+
+    // Invariant: Tab 2 should now reject requests immediately without attempting token refresh
+    const page2Result = await page2.evaluate(async () => {
+      try {
+        await OrbitClient.apiRequest('/api/organizations');
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message };
+      }
+    });
+
+    expect(page2Result.success).toBe(false);
+    expect(page2Result.error).toMatch(/Session expired or revoked/i);
 
     await context.close();
   }, 30000);

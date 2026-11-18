@@ -230,6 +230,19 @@ Diagnostic execution of `python .agents/skills/gravitas/scripts/doctor.py` confi
     - In `docker-compose.yml`, enforce explicit environment variable injection and remove silent production fallbacks.
     - In `docker/postgres/init-roles.sql`, add a fail-fast validation check preventing predictable default passwords from being applied if `NODE_ENV` is `production` or `staging`.
 
+### Decision 21: Complete Milestone 1 Architecture and Security Closure
+- **Context:** An end-to-end audit of Milestone 1 identified four remaining defects:
+  1. `apps/web/src/context/auth-context.tsx` did not invoke `setActiveUserId()` on login, registration, or profile restoration, and did not call `markLoggedOut()` on logout.
+  2. Sibling refresh reuse in `client.ts` contained a counter-bypass bug: `getStoredRefreshCounter() > queueCounter || isSiblingRefreshValid()` bypassed session identity verification whenever the counter incremented.
+  3. `docker/postgres/init-roles.sql` used psql literal interpolation inside a dollar-quoted `DO $$ ... $$` block (`:'env_node_env'`), which is invalid SQL syntax and causes syntax errors in fresh deployments.
+  4. CI workflow definition was missing or unverified for the dedicated browser and database test runner.
+- **Decision:**
+  - **21.1 End-to-End Auth Lifecycle Wiring:** Wire `setActiveUserId` into `auth-context.tsx` during `login`, `register`, `refreshProfile`, and `authFailureHandler`. Invoke `markLoggedOut()` during `logout()`, properly dispatching `ORBIT_LOGOUT` to all listening tabs. Automatically update `currentUserId` and session correlation inside `apiRequest` upon receiving successful auth responses.
+  - **21.2 Counter-Bypass Elimination:** Eliminate the logical bypass. All sibling refresh reuses must pass through `isSiblingRefreshValid(dispatchEpoch, queueCounter)`, which enforces `status === 'success'`, timing or monotonic counter progress, non-null session correlation, and matching `userId`. Mismatched users or missing identities can never reuse sibling tokens.
+  - **21.3 PostgreSQL Dollar-Quote Syntax Fix:** Replace psql interpolation inside `DO $$ ... $$` with session configuration parameters (`SELECT set_config('orbit.env_node_env', :'env_node_env', false)` and `current_setting('orbit.env_node_env', true)`). Add `\set ON_ERROR_STOP on` to guarantee immediate fail-fast termination if production validation fails.
+  - **21.4 Cross-Platform Real Browser Lifecycle Tests:** Add real multi-page browser tests verifying cross-tab account switching (User A in Tab 1, User B in Tab 2), multi-tab logout propagation, and clean profile restoration.
+  - **21.5 CI Workflow Provisioning:** Author `.github/workflows/ci.yml` providing reproducible automated verification across Node 24, PostgreSQL 16 with pgvector, Redis 7, and Playwright headless Chromium.
+
 
 ---
 
