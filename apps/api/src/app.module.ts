@@ -14,6 +14,8 @@ import { OrganizationsService } from './organizations/organizations.service';
 import { OrganizationsController } from './organizations/organizations.controller';
 import { ChannelsService } from './channels/channels.service';
 import { ChannelsController } from './channels/channels.controller';
+import { ConversationsService } from './conversations/conversations.service';
+import { ConversationsController } from './conversations/conversations.controller';
 
 @Module({
   imports: [
@@ -31,6 +33,7 @@ import { ChannelsController } from './channels/channels.controller';
     AuthController,
     OrganizationsController,
     ChannelsController,
+    ConversationsController,
   ],
   providers: [
     PrismaService,
@@ -46,6 +49,7 @@ import { ChannelsController } from './channels/channels.controller';
     TenantGuard,
     OrganizationsService,
     ChannelsService,
+    ConversationsService,
   ],
   exports: [
     PrismaService,
@@ -54,6 +58,7 @@ import { ChannelsController } from './channels/channels.controller';
     TenantTransactionRunner,
     TenantGuard,
     CsrfGuard,
+    ConversationsService,
   ],
 })
 export class AppModule {}

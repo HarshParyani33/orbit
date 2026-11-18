@@ -42,8 +42,51 @@ export const addMemberSchema = z.object({
   role: z.enum(['ADMIN', 'MEMBER']).default('MEMBER'),
 });
 
+// Channel Schemas
+export const createChannelSchema = z.object({
+  name: z.string().min(2, 'Name must be at least 2 characters').max(64).trim(),
+  provider: z.enum(['META_WHATSAPP', 'META_INSTAGRAM', 'WEB_CHAT']),
+  config: z.record(z.unknown()).optional(),
+});
+
+export const updateChannelSchema = z.object({
+  name: z.string().min(2, 'Name must be at least 2 characters').max(64).trim().optional(),
+  config: z.record(z.unknown()).optional(),
+  status: z.enum(['ACTIVE', 'INACTIVE']).optional(),
+});
+
+// Conversation Schemas
+export const createConversationSchema = z.object({
+  channelId: z.string().uuid('Invalid channel ID'),
+  title: z.string().max(255).optional(),
+  initialMessage: z.string().min(1).max(10000).optional(),
+});
+
+export const updateConversationStatusSchema = z.object({
+  status: z.enum(['OPEN', 'RESOLVED', 'SNOOZED']),
+});
+
+export const listConversationsQuerySchema = z.object({
+  status: z.enum(['OPEN', 'RESOLVED', 'SNOOZED']).optional(),
+  channelId: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().uuid().optional(),
+});
+
+// Message Schemas
+export const createMessageSchema = z.object({
+  content: z.string().min(1, 'Message content cannot be empty').max(10000),
+  senderType: z.enum(['CUSTOMER', 'AGENT', 'AI', 'SYSTEM']).default('AGENT'),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type CreateOrganizationInput = z.infer<typeof createOrganizationSchema>;
 export type UpdateOrganizationInput = z.infer<typeof updateOrganizationSchema>;
 export type AddMemberInput = z.infer<typeof addMemberSchema>;
+export type CreateChannelInput = z.infer<typeof createChannelSchema>;
+export type UpdateChannelInput = z.infer<typeof updateChannelSchema>;
+export type CreateConversationInput = z.infer<typeof createConversationSchema>;
+export type UpdateConversationStatusInput = z.infer<typeof updateConversationStatusSchema>;
+export type ListConversationsQuery = z.infer<typeof listConversationsQuerySchema>;
+export type CreateMessageInput = z.infer<typeof createMessageSchema>;

@@ -21,6 +21,58 @@ export enum OrgStatus {
   DELETED = 'DELETED',
 }
 
+export enum ConversationStatus {
+  OPEN = 'OPEN',
+  RESOLVED = 'RESOLVED',
+  SNOOZED = 'SNOOZED',
+}
+
+export enum SenderType {
+  CUSTOMER = 'CUSTOMER',
+  AGENT = 'AGENT',
+  AI = 'AI',
+  SYSTEM = 'SYSTEM',
+}
+
+export enum ChannelProvider {
+  META_WHATSAPP = 'META_WHATSAPP',
+  META_INSTAGRAM = 'META_INSTAGRAM',
+  WEB_CHAT = 'WEB_CHAT',
+}
+
+export interface ChannelSummary {
+  id: string;
+  organizationId: string;
+  name: string;
+  provider: string;
+  status: string;
+  config?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MessageSummary {
+  id: string;
+  organizationId: string;
+  conversationId: string;
+  senderType: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface ConversationSummary {
+  id: string;
+  organizationId: string;
+  channelId: string;
+  status: string;
+  title: string | null;
+  createdAt: string;
+  updatedAt: string;
+  channel?: Pick<ChannelSummary, 'id' | 'name' | 'provider'>;
+  messages?: MessageSummary[];
+  lastMessage?: MessageSummary | null;
+}
+
 export interface TenantContext {
   userId: string;
   orgId: string;
