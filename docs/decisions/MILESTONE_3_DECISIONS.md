@@ -49,3 +49,45 @@ This document records the architectural and engineering decisions for **Mileston
   - Full test suite: 214/214 tests passing across all 18 suites.
   - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
   - **GitHub Actions CI Verification:** [CI Run #44322394554](https://github.com/HarshParyani33/orbit/actions/runs/44322394554) completed with conclusion `success` across all 17 pipeline steps.
+
+---
+
+## Decision 31: Meta WhatsApp Inbound Webhook Processing & Channel Adapter (Milestone 3 Slice 3.2)
+
+- **Status:** APPROVED & IN IMPLEMENTATION
+- **Date:** 2026-11-18
+- **Context:**
+  Milestone 3 Slice 3.2 introduces full two-way WhatsApp Business Platform integration to Project Orbit.
+  Per `docs/PROJECT_CONTEXT.md` Module 6 and `docs/ARCHITECTURE.md` Section 7:
+  1. Inbound WhatsApp messages arriving at `POST /api/webhooks/whatsapp` must be parsed, deduplicated, linked to the customer CRM identity, mapped into unified conversations, and appended as messages.
+  2. Customer resolution must map phone numbers to `CustomerChannelIdentity` with `verified: true` (since phone numbers are cryptographic/OTP verified by Meta).
+  3. Re-opens snoozed/resolved conversations when a customer replies.
+  4. Triggers the automation engine (`MESSAGE_RECEIVED`) and real-time WebSocket notifications to human agents.
+  5. Outbound agent replies must invoke the WhatsApp adapter (`IWhatsAppAdapter`), recording message delivery status and external message ID.
+  6. Outbound calls must fail gracefully when channel credentials are unconfigured or when Meta returns an error.
+
+- **Architectural Specifications & Invariants:**
+  1. **WhatsApp Ingestion Service (`WhatsAppIngestionService`):**
+     - Extracts message envelope: `wamid`, sender `from` phone number, message text, and optional profile name.
+     - Customer CRM Linking:
+       - Queries `CustomerChannelIdentity` within tenant context.
+       - If missing, creates `Customer` with `phone: fromPhoneNumber`, `displayName: profileName || fromPhoneNumber` and creates `CustomerChannelIdentity` with `verified: true`.
+     - Conversation Thread Continuity:
+       - Finds active conversation for `(channelId, customerId)`.
+       - Re-opens `SNOOZED` conversation to `OPEN`.
+       - Creates new `Conversation` if no active conversation exists.
+     - Appends `Message` (`senderType: 'CUSTOMER'`, `metadata: { wamid, type }`).
+     - Emits WebSocket event and triggers automation rules.
+  2. **WhatsApp Adapter Abstraction (`@orbit/integrations`):**
+     - `IWhatsAppAdapter` contract with `sendMessage(channelConfig, to, text)`.
+     - `MockWhatsAppAdapter` with deterministic responses and simulated latency.
+     - In `ConversationsService.createMessage`: if `senderType === 'AGENT'` and channel is `META_WHATSAPP`, invokes adapter and stores `metadata: { externalId, status: 'DISPATCHED' }`.
+
+- **Evidence & Verification:**
+  - Automated integration tests covering:
+    - Inbound WhatsApp message parsing, customer identity creation, and thread creation.
+    - Customer thread continuity: multiple messages from the same phone number append to the same thread.
+    - Re-opening snoozed conversations on customer reply.
+    - Automation engine trigger and real-time event dispatch.
+    - Outbound agent message dispatch via WhatsApp adapter.
+    - Idempotent deduplication when identical webhook is re-delivered.

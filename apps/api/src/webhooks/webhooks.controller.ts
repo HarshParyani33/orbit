@@ -15,7 +15,9 @@ import {
 import { getConfig } from '@orbit/config';
 import { IngressDatabaseService } from './ingress-database.service';
 import { WebhookOutboxService } from './webhook-outbox.service';
+import { WhatsAppIngestionService } from './whatsapp-ingestion.service';
 import { MetaSignatureGuard } from './guards/meta-signature.guard';
+import { Optional } from '@nestjs/common';
 import * as crypto from 'crypto';
 
 @Controller('api/webhooks')
@@ -24,7 +26,8 @@ export class WebhooksController {
 
   constructor(
     private readonly ingressDb: IngressDatabaseService,
-    private readonly outboxService: WebhookOutboxService
+    private readonly outboxService: WebhookOutboxService,
+    @Optional() private readonly whatsAppIngestion?: WhatsAppIngestionService
   ) {}
 
   /**
@@ -88,9 +91,10 @@ export class WebhooksController {
     const statuses = payload?.entry?.[0]?.changes?.[0]?.value?.statuses || [];
 
     if (messages.length > 0) {
+      let hasNewMessages = false;
       for (const msg of messages) {
         const idempotencyKey = msg.id || `wamid_${crypto.randomUUID()}`;
-        const { event } = await this.outboxService.recordEvent(
+        const { event, isDuplicate } = await this.outboxService.recordEvent(
           organizationId,
           channelId,
           'META_WHATSAPP',
@@ -99,6 +103,14 @@ export class WebhooksController {
         );
         // Immediate dispatch acknowledgement
         await this.outboxService.markDispatched(organizationId, event.id, event.dispatchToken);
+        if (!isDuplicate) {
+          hasNewMessages = true;
+        }
+      }
+
+      // Ingest into Customer CRM & Conversation thread if new messages and ingestion service available
+      if (hasNewMessages && this.whatsAppIngestion) {
+        await this.whatsAppIngestion.ingestInboundMessage(organizationId, channelId, payload);
       }
     } else if (statuses.length > 0) {
       for (const status of statuses) {

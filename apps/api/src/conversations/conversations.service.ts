@@ -8,6 +8,7 @@ import {
 import { TenantTransactionRunner } from '../tenancy/tenant-transaction-runner';
 import { RealtimeService } from '../realtime/realtime.service';
 import { AutomationsService } from '../automations/automations.service';
+import { IWhatsAppAdapter, MockWhatsAppAdapter } from '@orbit/integrations';
 import {
   CreateConversationInput,
   ListConversationsQuery,
@@ -16,6 +17,8 @@ import {
 
 @Injectable()
 export class ConversationsService {
+  private whatsAppAdapter: IWhatsAppAdapter = new MockWhatsAppAdapter();
+
   constructor(
     @Inject(TenantTransactionRunner)
     private readonly tenantRunner: TenantTransactionRunner,
@@ -26,6 +29,14 @@ export class ConversationsService {
     @Inject(AutomationsService)
     private readonly automationsService?: AutomationsService
   ) { }
+
+  setWhatsAppAdapter(adapter: IWhatsAppAdapter) {
+    this.whatsAppAdapter = adapter;
+  }
+
+  getWhatsAppAdapter(): IWhatsAppAdapter {
+    return this.whatsAppAdapter;
+  }
 
   async listConversations(organizationId: string, query: ListConversationsQuery) {
     return this.tenantRunner.runWithTenant(organizationId, async (tx) => {
@@ -281,10 +292,22 @@ export class ConversationsService {
     const message = await this.tenantRunner.runWithTenant(organizationId, async (tx) => {
       const conversation = await tx.conversation.findFirst({
         where: { id: conversationId, organizationId },
+        include: { channel: true, customer: true },
       });
 
       if (!conversation) {
         throw new NotFoundException('Conversation not found');
+      }
+
+      if (data.senderType === 'AGENT' && conversation.channel?.provider === 'META_WHATSAPP') {
+        const toPhone = conversation.customer?.phone;
+        if (toPhone) {
+          await this.whatsAppAdapter.sendMessage({
+            phoneNumberId: (conversation.channel.config as any)?.phoneNumberId || 'default',
+            to: toPhone,
+            text: data.content,
+          });
+        }
       }
 
       const message = await tx.message.create({

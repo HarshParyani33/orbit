@@ -31,6 +31,7 @@ import { RealtimeModule } from './realtime/realtime.module';
 import { WebhooksController } from './webhooks/webhooks.controller';
 import { IngressDatabaseService } from './webhooks/ingress-database.service';
 import { WebhookOutboxService } from './webhooks/webhook-outbox.service';
+import { WhatsAppIngestionService } from './webhooks/whatsapp-ingestion.service';
 import { MetaSignatureGuard } from './webhooks/guards/meta-signature.guard';
 
 @Module({
@@ -82,6 +83,7 @@ import { MetaSignatureGuard } from './webhooks/guards/meta-signature.guard';
     AnalyticsService,
     IngressDatabaseService,
     WebhookOutboxService,
+    WhatsAppIngestionService,
   ],
   exports: [
     PrismaService,
@@ -98,6 +100,7 @@ import { MetaSignatureGuard } from './webhooks/guards/meta-signature.guard';
     AnalyticsService,
     IngressDatabaseService,
     WebhookOutboxService,
+    WhatsAppIngestionService,
   ],
 })
 export class AppModule { }

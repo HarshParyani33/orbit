@@ -25,3 +25,7 @@ export interface IChannelAdapter {
 export * from './ai/types';
 export * from './ai/mock-provider';
 export * from './ai/openai-provider';
+
+// WhatsApp Provider Contracts & Adapters
+export * from './whatsapp/types';
+export * from './whatsapp/mock-whatsapp.adapter';
