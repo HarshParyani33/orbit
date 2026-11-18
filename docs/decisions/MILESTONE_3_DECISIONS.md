@@ -138,3 +138,53 @@ This document records the architectural and engineering decisions for **Mileston
   - Full test suite: 226/226 tests passing across all 20 suites.
   - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
   - **GitHub Actions CI Verification:** [CI Run #44326573018](https://github.com/HarshParyani33/orbit/actions/runs/44326573018) completed with conclusion `success` across all 17 pipeline steps.
+
+---
+
+## Decision 33: Message Media Attachments & Multi-Tenant Storage Abstraction (Milestone 3 Slice 3.4)
+
+- **Status:** APPROVED & IN IMPLEMENTATION
+- **Date:** 2026-11-18
+- **Context:**
+  Milestone 3 Slice 3.4 introduces unified media attachment support and multi-tenant file storage to Project Orbit.
+  Per `docs/PROJECT_CONTEXT.md` Section 8 (`message_attachments`) and `docs/ARCHITECTURE.md` multi-tenant security architecture:
+  1. Inbound and outbound conversations require support for media attachments (images, PDFs, documents).
+  2. Storage must be multi-tenant isolated: storage keys must partition by organization ID (`attachments/<organizationId>/<messageId>/<uuid>_<fileName>`).
+  3. The storage layer must be abstracted via `IStorageProvider` to support local filesystem storage (`DiskStorageProvider`) and cloud object storage (S3-compatible) with path traversal guards.
+  4. Attachments metadata must be persisted in PostgreSQL table `message_attachments` with strict Row-Level Security (RLS) and composite foreign keys `[message_id, organization_id]`.
+  5. Security controls must enforce MIME type whitelisting, file size limits (10MB), filename sanitization, and strict tenant boundary validation on upload and download.
+
+- **Architectural Specifications & Invariants:**
+  1. **Database Schema & RLS:**
+     - `message_attachments` table with `id`, `organization_id`, `message_id`, `file_name`, `file_type`, `file_size`, `storage_key`, `storage_provider`, `created_at`, `deleted_at`.
+     - Composite unique constraint `uq_messages_id_org` on `messages(id, organization_id)`.
+     - Composite foreign key `[message_id, organization_id]` referencing `messages(id, organization_id)` on delete cascade.
+     - PostgreSQL RLS policy `tenant_isolation_message_attachments` enforcing `organization_id = NULLIF(current_setting('app.current_org_id', true), '')::UUID` for `orbit_app`.
+  2. **Storage Provider Abstraction (`@orbit/integrations`):**
+     - Contract `IStorageProvider`: `upload`, `download`, `delete`, `exists`.
+     - `DiskStorageProvider` implementation with path traversal defense: verifies resolved paths remain strictly within `baseDirectory` and rejects path traversal sequences (`..`, null bytes).
+  3. **Attachments Service & API (`apps/api`):**
+     - `POST /api/conversations/:id/messages/:messageId/attachments`:
+       - Validates conversation and message ownership via tenant RLS.
+       - MIME type whitelist: `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `application/pdf`, `text/plain`, `application/json`.
+       - Size limit: 10MB maximum.
+       - Sanitizes filename (strips path separators, null bytes, non-ASCII/control characters).
+       - Uploads to storage provider and creates database record.
+       - Emits real-time WebSocket event `attachment:created`.
+     - `GET /api/conversations/:id/messages/:messageId/attachments`:
+       - Lists all non-deleted attachments for a message within tenant boundary.
+     - `GET /api/conversations/:id/messages/:messageId/attachments/:attachmentId`:
+       - Downloads/streams file buffer with correct `Content-Type` and `Content-Disposition`.
+     - `DELETE /api/conversations/:id/messages/:messageId/attachments/:attachmentId`:
+       - Soft-deletes attachment record (`deleted_at = NOW()`).
+
+- **Evidence & Verification Plan:**
+  - Database migration `20261118000005_message_attachments` applied and RLS verified.
+  - Storage provider unit/integration tests verifying path traversal prevention and upload/download/delete lifecycle.
+  - HTTP integration tests verifying:
+    - Successful attachment upload, metadata persistence, and file download.
+    - Path traversal attack attempts rejected with security error.
+    - Malicious or unapproved MIME types rejected with 400 Bad Request.
+    - File size limit exceeding 10MB rejected with 400 Bad Request.
+    - Cross-tenant attachment access blocked by PostgreSQL RLS.
+    - Real-time WebSocket event emission on upload.

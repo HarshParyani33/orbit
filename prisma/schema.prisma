@@ -52,11 +52,12 @@ model Organization {
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
 
-  memberships      OrganizationMembership[]
-  channels         Channel[]
-  aiConfigurations AiConfiguration[]
-  automationRules  AutomationRule[]
-  webhookEvents    WebhookEvent[]
+  memberships        OrganizationMembership[]
+  channels           Channel[]
+  aiConfigurations   AiConfiguration[]
+  automationRules    AutomationRule[]
+  webhookEvents      WebhookEvent[]
+  messageAttachments MessageAttachment[]
 
   @@map("organizations")
 }
@@ -197,10 +198,33 @@ model Message {
   content        String   @db.Text
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
-  conversation Conversation @relation(fields: [conversationId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  conversation Conversation        @relation(fields: [conversationId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  attachments  MessageAttachment[]
 
+  @@unique([id, organizationId], name: "uq_messages_id_org")
   @@index([organizationId, conversationId])
   @@map("messages")
+}
+
+model MessageAttachment {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @map("organization_id") @db.Uuid
+  messageId       String    @map("message_id") @db.Uuid
+  fileName        String    @map("file_name") @db.VarChar(255)
+  fileType        String    @map("file_type") @db.VarChar(128)
+  fileSize        Int       @map("file_size")
+  storageKey      String    @map("storage_key") @db.VarChar(512)
+  storageProvider String    @default("LOCAL") @map("storage_provider") @db.VarChar(32)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz()
+
+  message      Message      @relation(fields: [messageId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@unique([id, organizationId], name: "uq_message_attachments_id_org")
+  @@index([organizationId, messageId])
+  @@index([organizationId, createdAt])
+  @@map("message_attachments")
 }
 
 // ==============================================================================

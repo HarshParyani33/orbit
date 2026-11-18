@@ -34,6 +34,8 @@ import { WebhookOutboxService } from './webhooks/webhook-outbox.service';
 import { WhatsAppIngestionService } from './webhooks/whatsapp-ingestion.service';
 import { InstagramIngestionService } from './webhooks/instagram-ingestion.service';
 import { MetaSignatureGuard } from './webhooks/guards/meta-signature.guard';
+import { AttachmentsService } from './attachments/attachments.service';
+import { AttachmentsController } from './attachments/attachments.controller';
 
 @Module({
   imports: [
@@ -59,6 +61,7 @@ import { MetaSignatureGuard } from './webhooks/guards/meta-signature.guard';
     AutomationsController,
     AnalyticsController,
     WebhooksController,
+    AttachmentsController,
   ],
   providers: [
     PrismaService,
@@ -86,6 +89,7 @@ import { MetaSignatureGuard } from './webhooks/guards/meta-signature.guard';
     WebhookOutboxService,
     WhatsAppIngestionService,
     InstagramIngestionService,
+    AttachmentsService,
   ],
   exports: [
     PrismaService,
@@ -104,6 +108,7 @@ import { MetaSignatureGuard } from './webhooks/guards/meta-signature.guard';
     WebhookOutboxService,
     WhatsAppIngestionService,
     InstagramIngestionService,
+    AttachmentsService,
   ],
 })
 export class AppModule { }

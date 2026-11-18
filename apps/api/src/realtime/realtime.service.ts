@@ -63,4 +63,23 @@ export class RealtimeService {
       this.logger.error(`[Realtime] Error emitting message:created: ${err.message}`);
     }
   }
+
+  emitAttachmentCreated(
+    organizationId: string,
+    conversationId: string,
+    messageId: string,
+    attachment: any
+  ): void {
+    if (!this.gateway?.server) return;
+    try {
+      this.gateway.server.to(`conv:${conversationId}`).emit('attachment:created', {
+        conversationId,
+        messageId,
+        attachment,
+      });
+      this.logger.debug(`[Realtime] Emitted attachment:created to conv:${conversationId}`);
+    } catch (err: any) {
+      this.logger.error(`[Realtime] Error emitting attachment:created: ${err.message}`);
+    }
+  }
 }

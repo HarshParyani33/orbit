@@ -189,3 +189,17 @@ export type GenerateAiSuggestionInput = z.infer<typeof generateAiSuggestionSchem
 export type WidgetSessionInitInput = z.infer<typeof widgetSessionInitSchema>;
 export type WidgetSendMessageInput = z.infer<typeof widgetSendMessageSchema>;
 export type CreateAutomationRuleInput = z.infer<typeof createAutomationRuleSchema>;
+
+// Attachment Constants & Validation
+export const ALLOWED_ATTACHMENT_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'application/pdf',
+  'text/plain',
+  'application/json',
+] as const;
+
+export const MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+

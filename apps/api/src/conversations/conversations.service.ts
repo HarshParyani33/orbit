@@ -135,6 +135,11 @@ export class ConversationsService {
           },
           messages: {
             orderBy: { createdAt: 'asc' },
+            include: {
+              attachments: {
+                where: { deletedAt: null },
+              },
+            },
           },
         },
       });

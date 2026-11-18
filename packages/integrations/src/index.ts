@@ -33,3 +33,8 @@ export * from './whatsapp/mock-whatsapp.adapter';
 // Instagram Provider Contracts & Adapters
 export * from './instagram/types';
 export * from './instagram/mock-instagram.adapter';
+
+// Storage Provider Contracts & Adapters
+export * from './storage/types';
+export * from './storage/disk-storage.provider';
+export * from './storage/mock-storage.provider';
