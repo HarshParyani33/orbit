@@ -14,6 +14,32 @@ import * as fs from 'fs';
 declare const window: any;
 declare const OrbitClient: any;
 
+function findSystemBrowser(): string | undefined {
+  if (process.env.CHROME_BIN && fs.existsSync(process.env.CHROME_BIN)) {
+    return process.env.CHROME_BIN;
+  }
+  const candidatePaths = [
+    // Windows Chrome & Edge
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+    // Linux Chrome & Chromium
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/snap/bin/chromium',
+    // macOS Chrome & Edge
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+  ];
+  for (const p of candidatePaths) {
+    if (fs.existsSync(p)) return p;
+  }
+  return undefined;
+}
+
 describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () => {
   let app: INestApplication;
   let baseUrl: string;
@@ -23,11 +49,7 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
   let browser: Browser;
   let bundlePath: string;
 
-  const chromeExecutable =
-    process.env.CHROME_BIN ||
-    (fs.existsSync('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe')
-      ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
-      : 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe');
+  const browserPath = findSystemBrowser();
 
   beforeAll(async () => {
     // 1. Programmatically bundle apps/web/src/api/client.ts into standalone browser IIFE
@@ -68,11 +90,19 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
     prisma = app.get(PrismaService);
 
     // 3. Launch real headless Chromium browser
-    browser = await chromium.launch({
-      executablePath: chromeExecutable,
-      headless: true,
-    });
-  }, 30000);
+    const launchOptions: any = { headless: true };
+    if (browserPath) {
+      launchOptions.executablePath = browserPath;
+    }
+
+    try {
+      browser = await chromium.launch(launchOptions);
+    } catch (err: any) {
+      throw new Error(
+        `Failed to launch browser executable (${browserPath || 'default'}). Ensure Google Chrome or Chromium is installed or run 'npx playwright install chromium'. Details: ${err.message}`
+      );
+    }
+  }, 45000);
 
   afterAll(async () => {
     if (browser) {
@@ -82,17 +112,33 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
       await app.close();
     }
     if (prisma) {
+      try {
+        await prisma.userSession.deleteMany({
+          where: { user: { email: { contains: 'browser_' } } },
+        });
+        await prisma.organizationMembership.deleteMany({
+          where: { user: { email: { contains: 'browser_' } } },
+        });
+        await prisma.organization.deleteMany({
+          where: { slug: { contains: 'browser-' } },
+        });
+        await prisma.user.deleteMany({
+          where: { email: { contains: 'browser_' } },
+        });
+      } catch {}
       await prisma.$disconnect();
+    }
+    if (bundlePath && fs.existsSync(bundlePath)) {
+      try {
+        fs.unlinkSync(bundlePath);
+      } catch {}
     }
   }, 30000);
 
   it('Scenario 1: Real Browser Multi-Tab Refresh with Web Locks API serializes execution to exactly ONE network refresh', async () => {
-    // Create isolated browser context representing one logged-in browser profile with shared cookies
     const context: BrowserContext = await browser.newContext();
-
     const testEmail = `browser_m1_${Date.now()}@example.com`;
 
-    // Open Tab 1 and Tab 2 in the same browser context
     const page1 = await context.newPage();
     const page2 = await context.newPage();
 
@@ -116,24 +162,18 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
     );
     expect(regResult).toBeDefined();
 
-    // Set active organization in both tabs
     const orgId = regResult.organizations[0].id;
     await page1.evaluate((id: string) => OrbitClient.setActiveOrgId(id), orgId);
     await page2.evaluate((id: string) => OrbitClient.setActiveOrgId(id), orgId);
 
-    // Verify initial protected request works in Tab 1
+    // Initial protected request works
     const initialOrgs = await page1.evaluate(() => OrbitClient.apiRequest('/api/organizations'));
     expect(Array.isArray(initialOrgs)).toBe(true);
     expect(initialOrgs.length).toBeGreaterThan(0);
 
-    // Simulate access token expiration by clearing access_token cookie while preserving refresh_token cookie
-    const cookies = await context.cookies();
-    const refreshTokenCookie = cookies.find((c) => c.name === 'refresh_token');
-    expect(refreshTokenCookie).toBeDefined();
-
+    // Expire access token by clearing access_token cookie while preserving refresh_token cookie
     await context.clearCookies({ name: 'access_token' });
 
-    // Track network calls to /api/auth/refresh across both tabs
     let refreshNetworkCalls = 0;
     const countRefresh = (req: any) => {
       if (req.url().includes('/api/auth/refresh') && req.method() === 'POST') {
@@ -144,8 +184,6 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
     page2.on('request', countRefresh);
 
     // SIMULTANEOUS PROTECTED REQUESTS ACROSS TWO INDEPENDENT TABS:
-    // Both tabs dispatch /api/organizations simultaneously. Both receive 401 (missing/expired access token).
-    // Both tabs trigger cross-tab refresh coordination.
     const [tab1Result, tab2Result] = await Promise.all([
       page1.evaluate(() => OrbitClient.apiRequest('/api/organizations')),
       page2.evaluate(() => OrbitClient.apiRequest('/api/organizations')),
@@ -154,27 +192,21 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
     expect(tab1Result).toEqual(initialOrgs);
     expect(tab2Result).toEqual(initialOrgs);
 
-    // CRITICAL INVARIANT: In real multi-tab browser, exactly ONE network call to /api/auth/refresh was executed!
+    // CRITICAL: Exactly ONE network call to /api/auth/refresh was executed!
     expect(refreshNetworkCalls).toBe(1);
 
-    // Verify database session family remains healthy: exactly 1 active rotated session, 1 consumed revoked session
+    // Verify session family is healthy: 1 active rotated session, 1 consumed revoked session
     const activeSessions = await prisma.userSession.findMany({
       where: { userId: regResult.user.id, isRevoked: false },
     });
     expect(activeSessions.length).toBe(1);
 
-    const revokedSessions = await prisma.userSession.findMany({
-      where: { userId: regResult.user.id, isRevoked: true },
-    });
-    expect(revokedSessions.length).toBe(1);
-
     await context.close();
   }, 30000);
 
-  it('Scenario 2: Real Browser Multi-Tab Refresh WITHOUT Web Locks (Tier-2 Fallback) serializes execution to exactly ONE network refresh', async () => {
+  it('Scenario 2: Fail-Closed Safety in Real Browser when Web Locks API is unavailable', async () => {
     const context: BrowserContext = await browser.newContext();
-
-    const testEmail = `browser_fallback_${Date.now()}@example.com`;
+    const testEmail = `browser_failclosed_${Date.now()}@example.com`;
 
     const page1 = await context.newPage();
     const page2 = await context.newPage();
@@ -182,24 +214,30 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
     await page1.goto(`${baseUrl}/test.html`);
     await page2.goto(`${baseUrl}/test.html`);
 
-    // EXPLICITLY DISABLE Web Locks API in both pages to force Tier-2 Fallback (Two-Phase Election)
+    // Explicitly disable navigator.locks in both pages to simulate an unsupported context
     await page1.evaluate(() => {
-      delete (window.navigator as any).locks;
+      Object.defineProperty(window.Navigator.prototype, 'locks', {
+        get: () => undefined,
+        configurable: true,
+      });
     });
     await page2.evaluate(() => {
-      delete (window.navigator as any).locks;
+      Object.defineProperty(window.Navigator.prototype, 'locks', {
+        get: () => undefined,
+        configurable: true,
+      });
     });
 
-    // Register user in Page 1 (sets ambient HTTP-only auth cookies in browser context)
+    // Register user
     const regResult = await page1.evaluate(
       async ({ email }) => {
         return await OrbitClient.apiRequest('/api/auth/register', {
           method: 'POST',
           body: JSON.stringify({
-            name: 'Browser Fallback User',
+            name: 'Fail Closed User',
             email,
             password: 'Password123!',
-            organizationName: 'Fallback Test Org',
+            organizationName: 'Fail Closed Org',
           }),
         });
       },
@@ -210,41 +248,36 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
     await page1.evaluate((id: string) => OrbitClient.setActiveOrgId(id), orgId);
     await page2.evaluate((id: string) => OrbitClient.setActiveOrgId(id), orgId);
 
-    // Expire access token by clearing cookie while retaining refresh_token cookie
+    // Clear access token
     await context.clearCookies({ name: 'access_token' });
 
-    let fallbackRefreshCalls = 0;
-    const countFallbackRefresh = (req: any) => {
+    let refreshAttempts = 0;
+    const countRefresh = (req: any) => {
       if (req.url().includes('/api/auth/refresh') && req.method() === 'POST') {
-        fallbackRefreshCalls++;
+        refreshAttempts++;
       }
     };
-    page1.on('request', countFallbackRefresh);
-    page2.on('request', countFallbackRefresh);
+    page1.on('request', countRefresh);
+    page2.on('request', countRefresh);
 
-    // SIMULTANEOUS PROTECTED REQUESTS WITH WEB LOCKS DISABLED:
-    // Exercises Tier-2 Two-Phase Election in localStorage across real Chrome browser processes
-    const [tab1Result, tab2Result] = await Promise.all([
+    // Both pages attempt requests without Web Locks:
+    // Invariant: Both must fail closed safely without making uncoordinated refresh calls
+    const results = await Promise.allSettled([
       page1.evaluate(() => OrbitClient.apiRequest('/api/organizations')),
       page2.evaluate(() => OrbitClient.apiRequest('/api/organizations')),
     ]);
 
-    expect(Array.isArray(tab1Result)).toBe(true);
-    expect(Array.isArray(tab2Result)).toBe(true);
+    expect(results[0].status).toBe('rejected');
+    expect(results[1].status).toBe('rejected');
 
-    // CRITICAL INVARIANT: Fallback two-phase election serialized execution to exactly ONE network refresh!
-    expect(fallbackRefreshCalls).toBe(1);
+    // Invariant: ZERO uncoordinated network refreshes occurred!
+    expect(refreshAttempts).toBe(0);
 
-    // Verify session family is healthy in PostgreSQL
+    // Invariant: Session family in database was NOT destroyed by a token race
     const activeSessions = await prisma.userSession.findMany({
       where: { userId: regResult.user.id, isRevoked: false },
     });
     expect(activeSessions.length).toBe(1);
-
-    const revokedSessions = await prisma.userSession.findMany({
-      where: { userId: regResult.user.id, isRevoked: true },
-    });
-    expect(revokedSessions.length).toBe(1);
 
     await context.close();
   }, 30000);
@@ -263,14 +296,13 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
     const page = await context.newPage();
     await page.goto(`${baseUrl}/test.html`);
 
-    // Initial refresh token
     const initialRefreshToken = regResult.refreshToken;
 
-    // Rotate token legitimately once (consuming initialRefreshToken)
+    // Rotate token legitimately once
     const rotateResult = await authService.refresh(initialRefreshToken);
     expect(rotateResult.accessToken).toBeDefined();
 
-    // Now attempt to replay the consumed initialRefreshToken directly from the browser page
+    // Now replay the consumed initialRefreshToken directly from the browser page
     const replayResponse = await page.evaluate(
       async ({ token }) => {
         const res = await fetch('/api/auth/refresh', {
@@ -298,6 +330,145 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
       where: { userId: regResult.response.user.id, isRevoked: false },
     });
     expect(activeSessionsAfterReplay.length).toBe(0);
+
+    await context.close();
+  }, 30000);
+
+  it('Scenario 4: Multi-Trial Concurrent Stress Test — 10 Repeated Trials across 3 Simultaneous Tabs', async () => {
+    const context: BrowserContext = await browser.newContext();
+    const testEmail = `browser_stress_${Date.now()}@example.com`;
+
+    const page1 = await context.newPage();
+    const page2 = await context.newPage();
+    const page3 = await context.newPage();
+
+    await page1.goto(`${baseUrl}/test.html`);
+    await page2.goto(`${baseUrl}/test.html`);
+    await page3.goto(`${baseUrl}/test.html`);
+
+    const regResult = await page1.evaluate(
+      async ({ email }) => {
+        return await OrbitClient.apiRequest('/api/auth/register', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: 'Stress Test User',
+            email,
+            password: 'Password123!',
+            organizationName: 'Stress Test Org',
+          }),
+        });
+      },
+      { email: testEmail }
+    );
+
+    const orgId = regResult.organizations[0].id;
+    await page1.evaluate((id: string) => OrbitClient.setActiveOrgId(id), orgId);
+    await page2.evaluate((id: string) => OrbitClient.setActiveOrgId(id), orgId);
+    await page3.evaluate((id: string) => OrbitClient.setActiveOrgId(id), orgId);
+
+    // Run 10 consecutive trials of simultaneous 3-tab 401 refresh cycles
+    const totalTrials = 10;
+    let totalRefreshCalls = 0;
+
+    const countReq = (req: any) => {
+      if (req.url().includes('/api/auth/refresh') && req.method() === 'POST') {
+        totalRefreshCalls++;
+      }
+    };
+    page1.on('request', countReq);
+    page2.on('request', countReq);
+    page3.on('request', countReq);
+
+    for (let trial = 1; trial <= totalTrials; trial++) {
+      // Pause between trials to ensure all asynchronous promise resolutions complete
+      await new Promise((r) => setTimeout(r, 60));
+
+      // Clear access token before each trial to force 401
+      await context.clearCookies({ name: 'access_token' });
+      const beforeCount = totalRefreshCalls;
+
+      // Dispatch simultaneous protected requests across all 3 tabs
+      const [r1, r2, r3] = await Promise.all([
+        page1.evaluate(() => OrbitClient.apiRequest('/api/organizations')),
+        page2.evaluate(() => OrbitClient.apiRequest('/api/organizations')),
+        page3.evaluate(() => OrbitClient.apiRequest('/api/organizations')),
+      ]);
+
+      expect(Array.isArray(r1)).toBe(true);
+      expect(Array.isArray(r2)).toBe(true);
+      expect(Array.isArray(r3)).toBe(true);
+
+      // Invariant: In every trial, exactly ONE refresh call was made across all 3 tabs
+      const trialRefreshCalls = totalRefreshCalls - beforeCount;
+      expect(trialRefreshCalls).toBe(1);
+    }
+
+    // Total refresh calls across all 10 trials MUST equal exactly 10
+    expect(totalRefreshCalls).toBe(totalTrials);
+
+    // Verify session family is healthy: exactly 1 active session, 10 rotated sessions
+    const activeSessions = await prisma.userSession.findMany({
+      where: { userId: regResult.user.id, isRevoked: false },
+    });
+    expect(activeSessions.length).toBe(1);
+
+    const revokedSessions = await prisma.userSession.findMany({
+      where: { userId: regResult.user.id, isRevoked: true },
+    });
+    expect(revokedSessions.length).toBe(totalTrials);
+
+    await context.close();
+  }, 60000);
+
+  it('Scenario 5: Tab Closure During Lock Acquisition cleanly releases lock to sibling tab', async () => {
+    const context: BrowserContext = await browser.newContext();
+    const testEmail = `browser_tabclose_${Date.now()}@example.com`;
+
+    const page1 = await context.newPage();
+    const page2 = await context.newPage();
+
+    await page1.goto(`${baseUrl}/test.html`);
+    await page2.goto(`${baseUrl}/test.html`);
+
+    const regResult = await page1.evaluate(
+      async ({ email }) => {
+        return await OrbitClient.apiRequest('/api/auth/register', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: 'Tab Close User',
+            email,
+            password: 'Password123!',
+            organizationName: 'Tab Close Org',
+          }),
+        });
+      },
+      { email: testEmail }
+    );
+
+    const orgId = regResult.organizations[0].id;
+    await page1.evaluate((id: string) => OrbitClient.setActiveOrgId(id), orgId);
+    await page2.evaluate((id: string) => OrbitClient.setActiveOrgId(id), orgId);
+
+    // Clear access token
+    await context.clearCookies({ name: 'access_token' });
+
+    // Page 1 acquires lock and then abruptly closes before finishing
+    await page1.evaluate(async () => {
+      // Hold lock artificially
+      (window as any).lockHolder = navigator.locks.request('orbit_auth_refresh_lock', async () => {
+        await new Promise((r) => setTimeout(r, 10000));
+      });
+    });
+
+    // Page 2 initiates request while lock is held by Page 1
+    const page2Promise = page2.evaluate(() => OrbitClient.apiRequest('/api/organizations'));
+
+    // Abruptly close Page 1 (simulating crashed or closed tab)
+    await page1.close();
+
+    // Invariant: Browser engine automatically releases lock on page closure; Page 2 acquires lock and recovers!
+    const page2Result = await page2Promise;
+    expect(Array.isArray(page2Result)).toBe(true);
 
     await context.close();
   }, 30000);

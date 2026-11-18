@@ -13,6 +13,7 @@
 
 -- 1. Read Environment-Driven Role Credentials (psql \getenv)
 -- Allows docker-compose / CI to inject credentials dynamically.
+\getenv env_node_env NODE_ENV
 \getenv env_migrator_pass ORBIT_MIGRATOR_PASSWORD
 \getenv env_app_pass ORBIT_APP_PASSWORD
 \getenv env_ingress_pass ORBIT_INGRESS_PASSWORD
@@ -32,6 +33,22 @@
 \else
   \set env_ingress_pass 'orbit_ingress_pass'
 \endif
+
+-- 1b. Strict Environment Boundary Enforcement:
+-- If NODE_ENV is set to production or staging, default development passwords MUST NOT be used!
+DO $$
+DECLARE
+  v_node_env text := NULLIF(:'env_node_env', '');
+  v_migrator_pass text := :'env_migrator_pass';
+  v_app_pass text := :'env_app_pass';
+  v_ingress_pass text := :'env_ingress_pass';
+BEGIN
+  IF v_node_env IN ('production', 'staging') THEN
+    IF v_migrator_pass = 'orbit_migrator_pass' OR v_app_pass = 'orbit_app_pass' OR v_ingress_pass = 'orbit_ingress_pass' THEN
+      RAISE EXCEPTION 'FATAL SECURITY VIOLATION: Default development database passwords cannot be used when NODE_ENV is %! Independent production secrets are required.', v_node_env;
+    END IF;
+  END IF;
+END $$;
 
 -- 2. Create Non-Superuser Database Roles (Without hardcoded passwords)
 DO $$

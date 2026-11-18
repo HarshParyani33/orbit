@@ -1,6 +1,7 @@
 import { ApiResponse } from '@orbit/shared';
 
 let currentOrgId: string | null = null;
+let currentUserId: string | null = null;
 let refreshPromise: Promise<boolean> | null = null;
 let authFailureHandler: (() => void) | null = null;
 let lastSuccessfulRefreshTime = 0;
@@ -8,31 +9,24 @@ let lastSuccessfulRefreshTime = 0;
 // Shared Storage & Web Lock Constants for Cross-Tab Coordination
 const STORAGE_KEY_LAST_REFRESH = 'orbit_auth_last_refresh_epoch';
 const STORAGE_KEY_REFRESH_STATUS = 'orbit_auth_last_refresh_status';
+const STORAGE_KEY_SESSION_CORRELATION = 'orbit_auth_session_correlation';
+const STORAGE_KEY_REFRESH_COUNTER = 'orbit_auth_refresh_counter';
 const STORAGE_KEY_LEASE = 'orbit_auth_refresh_lease';
 const STORAGE_PREFIX_CANDIDATE = 'orbit_auth_candidate_';
 const LOCK_NAME = 'orbit_auth_refresh_lock';
 const LOCK_TIMEOUT_MS = 10000;
-const LEASE_TTL_MS = 6000;
 
-interface LeaseData {
-  ownerId: string;
-  expiresAt: number;
+export interface SessionCorrelation {
+  userId: string;
+  sessionEpoch: number;
 }
-
-interface CandidateTicket {
-  clientId: string;
-  timestamp: number;
-  priority: number;
-}
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function getLocalStorage(): Storage | null {
   try {
     if (typeof window !== 'undefined' && window.localStorage) return window.localStorage;
     if (typeof globalThis !== 'undefined' && (globalThis as any).localStorage) return (globalThis as any).localStorage;
     if (typeof localStorage !== 'undefined') return localStorage;
-  } catch {}
+  } catch { }
   return null;
 }
 
@@ -58,7 +52,13 @@ try {
   if (typeof BroadcastChannel !== 'undefined') {
     broadcastChannel = new BroadcastChannel('orbit_auth_coordination');
     broadcastChannel.onmessage = (event: MessageEvent) => {
-      if (event.data?.type === 'ORBIT_REFRESH_FAILED') {
+      if (
+        event.data?.type === 'ORBIT_REFRESH_FAILED' ||
+        event.data?.type === 'ORBIT_LOGOUT'
+      ) {
+        currentUserId = null;
+        currentOrgId = null;
+        lastSuccessfulRefreshTime = 0;
         if (authFailureHandler) {
           authFailureHandler();
         }
@@ -75,6 +75,14 @@ export function setActiveOrgId(orgId: string | null) {
 
 export function getActiveOrgId(): string | null {
   return currentOrgId;
+}
+
+export function setActiveUserId(userId: string | null) {
+  currentUserId = userId;
+}
+
+export function getActiveUserId(): string | null {
+  return currentUserId;
 }
 
 export function setAuthFailureHandler(handler: () => void) {
@@ -94,7 +102,7 @@ export function getStoredRefreshEpoch(): number {
         return parseInt(val, 10) || 0;
       }
     }
-  } catch {}
+  } catch { }
   const memVal = memoryStorage[STORAGE_KEY_LAST_REFRESH];
   return memVal ? parseInt(memVal, 10) || 0 : 0;
 }
@@ -105,7 +113,7 @@ export function setStoredRefreshEpoch(epoch: number): void {
     if (storage) {
       storage.setItem(STORAGE_KEY_LAST_REFRESH, String(epoch));
     }
-  } catch {}
+  } catch { }
   memoryStorage[STORAGE_KEY_LAST_REFRESH] = String(epoch);
 }
 
@@ -115,22 +123,106 @@ export function getStoredRefreshStatus(): string | null {
     if (storage) {
       return storage.getItem(STORAGE_KEY_REFRESH_STATUS);
     }
-  } catch {}
+  } catch { }
   return memoryStorage[STORAGE_KEY_REFRESH_STATUS] || null;
 }
 
-export function setStoredRefreshStatus(status: 'success' | 'failed'): void {
+export function setStoredRefreshStatus(status: 'success' | 'failed' | 'logged_out'): void {
   try {
     const storage = getLocalStorage();
     if (storage) {
       storage.setItem(STORAGE_KEY_REFRESH_STATUS, status);
     }
-  } catch {}
+  } catch { }
   memoryStorage[STORAGE_KEY_REFRESH_STATUS] = status;
+}
+
+export function getStoredSessionCorrelation(): SessionCorrelation | null {
+  try {
+    const storage = getLocalStorage();
+    if (storage) {
+      const val = storage.getItem(STORAGE_KEY_SESSION_CORRELATION);
+      if (val) return JSON.parse(val);
+    }
+  } catch {}
+  const memVal = memoryStorage[STORAGE_KEY_SESSION_CORRELATION];
+  if (memVal) {
+    try {
+      return JSON.parse(memVal);
+    } catch {}
+  }
+  return null;
+}
+
+export function setStoredSessionCorrelation(correlation: SessionCorrelation | null): void {
+  try {
+    const storage = getLocalStorage();
+    if (storage) {
+      if (correlation) {
+        storage.setItem(STORAGE_KEY_SESSION_CORRELATION, JSON.stringify(correlation));
+      } else {
+        storage.removeItem(STORAGE_KEY_SESSION_CORRELATION);
+      }
+    }
+  } catch {}
+  if (correlation) {
+    memoryStorage[STORAGE_KEY_SESSION_CORRELATION] = JSON.stringify(correlation);
+  } else {
+    delete memoryStorage[STORAGE_KEY_SESSION_CORRELATION];
+  }
+}
+
+export function getStoredRefreshCounter(): number {
+  try {
+    const storage = getLocalStorage();
+    if (storage) {
+      const val = storage.getItem(STORAGE_KEY_REFRESH_COUNTER);
+      if (val) return parseInt(val, 10) || 0;
+    }
+  } catch {}
+  const memVal = memoryStorage[STORAGE_KEY_REFRESH_COUNTER];
+  return memVal ? parseInt(memVal, 10) || 0 : 0;
+}
+
+export function incrementStoredRefreshCounter(): number {
+  const next = getStoredRefreshCounter() + 1;
+  try {
+    const storage = getLocalStorage();
+    if (storage) {
+      storage.setItem(STORAGE_KEY_REFRESH_COUNTER, String(next));
+    }
+  } catch {}
+  memoryStorage[STORAGE_KEY_REFRESH_COUNTER] = String(next);
+  return next;
+}
+
+/**
+ * Validates whether a sibling tab's refresh completion is valid and matches the current session.
+ * Prevents cross-session credential contamination after account switch or logout.
+ */
+export function isSiblingRefreshValid(dispatchEpoch?: number): boolean {
+  const storedRefresh = getStoredRefreshEpoch();
+  const storedStatus = getStoredRefreshStatus();
+
+  if (!dispatchEpoch || storedRefresh <= dispatchEpoch || storedStatus !== 'success') {
+    return false;
+  }
+
+  // If current tab is associated with a specific user, verify session correlation
+  if (currentUserId) {
+    const correlation = getStoredSessionCorrelation();
+    if (!correlation || correlation.userId !== currentUserId) {
+      // Sibling refresh was performed by a different user or session identity was cleared
+      return false;
+    }
+  }
+
+  return true;
 }
 
 export function resetClientState(): void {
   currentOrgId = null;
+  currentUserId = null;
   refreshPromise = null;
   authFailureHandler = null;
   lastSuccessfulRefreshTime = 0;
@@ -140,6 +232,8 @@ export function resetClientState(): void {
     if (storage) {
       storage.removeItem(STORAGE_KEY_LAST_REFRESH);
       storage.removeItem(STORAGE_KEY_REFRESH_STATUS);
+      storage.removeItem(STORAGE_KEY_SESSION_CORRELATION);
+      storage.removeItem(STORAGE_KEY_REFRESH_COUNTER);
       storage.removeItem(STORAGE_KEY_LEASE);
       for (let i = storage.length - 1; i >= 0; i--) {
         const key = storage.key(i);
@@ -148,7 +242,17 @@ export function resetClientState(): void {
         }
       }
     }
-  } catch {}
+  } catch { }
+}
+
+export function markLoggedOut(): void {
+  resetClientState();
+  setStoredRefreshStatus('logged_out');
+  if (broadcastChannel) {
+    try {
+      broadcastChannel.postMessage({ type: 'ORBIT_LOGOUT', epoch: Date.now() });
+    } catch {}
+  }
 }
 
 /**
@@ -171,7 +275,7 @@ async function executeSingleFlightRefresh(): Promise<boolean> {
       if (broadcastChannel) {
         try {
           broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
-        } catch {}
+        } catch { }
       }
       if (authFailureHandler) {
         authFailureHandler();
@@ -188,7 +292,7 @@ async function executeSingleFlightRefresh(): Promise<boolean> {
       if (broadcastChannel) {
         try {
           broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
-        } catch {}
+        } catch { }
       }
       if (authFailureHandler) {
         authFailureHandler();
@@ -196,20 +300,33 @@ async function executeSingleFlightRefresh(): Promise<boolean> {
       return false;
     }
 
-    // Record successful refresh timestamps:
-    // 1. Shared storage epoch for cross-tab coordination
+    // Record successful refresh timestamps and session correlation:
     const nowEpoch = Date.now();
     setStoredRefreshEpoch(nowEpoch);
     setStoredRefreshStatus('success');
+    incrementStoredRefreshCounter();
 
-    // 2. Monotonic performance time for in-tab stale 401 interception
+    // Correlate active user session
+    if (json.data?.user?.id) {
+      currentUserId = json.data.user.id;
+      setStoredSessionCorrelation({
+        userId: json.data.user.id,
+        sessionEpoch: nowEpoch,
+      });
+    }
+
+    // Monotonic performance time for in-tab stale 401 interception
     lastSuccessfulRefreshTime = performance.now();
 
-    // 3. Notify sibling tabs via non-sensitive broadcast (no tokens or secrets)
+    // Notify sibling tabs via non-sensitive broadcast (no tokens or secrets)
     if (broadcastChannel) {
       try {
-        broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_COMPLETE', epoch: nowEpoch });
-      } catch {}
+        broadcastChannel.postMessage({
+          type: 'ORBIT_REFRESH_COMPLETE',
+          epoch: nowEpoch,
+          userId: currentUserId,
+        });
+      } catch { }
     }
 
     return true;
@@ -218,178 +335,12 @@ async function executeSingleFlightRefresh(): Promise<boolean> {
     if (broadcastChannel) {
       try {
         broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
-      } catch {}
+      } catch { }
     }
     if (authFailureHandler) {
       authFailureHandler();
     }
     return false;
-  }
-}
-
-/**
- * Tier-2 Fallback: Multi-tab mutual exclusion via Staged Two-Phase Ticket Election in localStorage.
- * Used when W3C Web Locks API (navigator.locks) is unavailable.
- *
- * Guarantees:
- * 1. Mutual Exclusion: At most one tab acquires the lease at any given time.
- * 2. Collision Resolution: Staged arbitration window (40-65ms) prevents simultaneous lease acquisition without CAS.
- * 3. Stale Lock Recovery: Crashed or terminated lease holders expire after LEASE_TTL_MS (6000ms).
- * 4. Fail-Closed Safety: If localStorage is unavailable, throwing, or times out, fails closed safely.
- * 5. Zero Token Disclosure: Only non-sensitive timestamps, UUIDs, and status flags are stored in localStorage.
- */
-async function executeLocalStorageFallbackRefresh(dispatchEpoch?: number): Promise<boolean> {
-  const storage = getLocalStorage();
-  if (!storage || !isLocalStorageAvailable()) {
-    // If neither Web Locks nor localStorage is functional, cross-tab mutual exclusion
-    // cannot be established. Fail closed safely rather than risking uncoordinated token rotation.
-    setStoredRefreshStatus('failed');
-    if (broadcastChannel) {
-      try {
-        broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
-      } catch {}
-    }
-    if (authFailureHandler) {
-      authFailureHandler();
-    }
-    return false;
-  }
-
-  const clientId = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-  const ticketKey = `${STORAGE_PREFIX_CANDIDATE}${clientId}`;
-  const startTime = Date.now();
-
-  try {
-    while (Date.now() - startTime < LOCK_TIMEOUT_MS) {
-      // 1. Check if another tab completed refresh while we were waiting
-      const storedRefresh = getStoredRefreshEpoch();
-      const storedStatus = getStoredRefreshStatus();
-      if (dispatchEpoch && storedRefresh > dispatchEpoch && storedStatus === 'success') {
-        lastSuccessfulRefreshTime = performance.now();
-        return true;
-      }
-
-      // 2. Check active lease
-      let currentLease: LeaseData | null = null;
-      try {
-        const raw = storage.getItem(STORAGE_KEY_LEASE);
-        if (raw) currentLease = JSON.parse(raw);
-      } catch {}
-
-      if (currentLease && currentLease.expiresAt > Date.now()) {
-        // Lease actively held by another tab. Sleep and re-check.
-        await sleep(35 + Math.random() * 25);
-        continue;
-      }
-
-      // 3. Phase 1: Post Candidate Ticket
-      const ticket: CandidateTicket = {
-        clientId,
-        timestamp: Date.now(),
-        priority: Math.random(),
-      };
-      try {
-        storage.setItem(ticketKey, JSON.stringify(ticket));
-      } catch {
-        // Storage write error, fail closed
-        setStoredRefreshStatus('failed');
-        if (authFailureHandler) authFailureHandler();
-        return false;
-      }
-
-      // 4. Phase 2: Arbitration jitter window (40-65ms)
-      await sleep(40 + Math.random() * 25);
-
-      // 5. Phase 3: Evaluate contenders
-      const candidates: CandidateTicket[] = [];
-      try {
-        for (let i = 0; i < storage.length; i++) {
-          const key = storage.key(i);
-          if (key && key.startsWith(STORAGE_PREFIX_CANDIDATE)) {
-            const rawVal = storage.getItem(key);
-            if (rawVal) {
-              const c: CandidateTicket = JSON.parse(rawVal);
-              if (Date.now() - c.timestamp < 1000) {
-                candidates.push(c);
-              }
-            }
-          }
-        }
-      } catch {}
-
-      candidates.sort((a, b) => {
-        if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
-        return a.priority - b.priority;
-      });
-
-      const winner = candidates[0];
-      if (!winner || winner.clientId !== clientId) {
-        // Lost election. Clean ticket, wait, and retry loop.
-        try { storage.removeItem(ticketKey); } catch {}
-        await sleep(35 + Math.random() * 25);
-        continue;
-      }
-
-      // 6. Phase 4: Winner commits lease
-      const lease: LeaseData = {
-        ownerId: clientId,
-        expiresAt: Date.now() + LEASE_TTL_MS,
-      };
-      try {
-        storage.setItem(STORAGE_KEY_LEASE, JSON.stringify(lease));
-        storage.removeItem(ticketKey);
-      } catch {
-        setStoredRefreshStatus('failed');
-        if (authFailureHandler) authFailureHandler();
-        return false;
-      }
-
-      // 7. Check if another tab refreshed while we arbitrated
-      const interimRefresh = getStoredRefreshEpoch();
-      const interimStatus = getStoredRefreshStatus();
-      if (dispatchEpoch && interimRefresh > dispatchEpoch && interimStatus === 'success') {
-        try { storage.removeItem(STORAGE_KEY_LEASE); } catch {}
-        lastSuccessfulRefreshTime = performance.now();
-        return true;
-      }
-
-      // 8. Winner executes refresh
-      try {
-        return await executeSingleFlightRefresh();
-      } finally {
-        try {
-          const raw = storage.getItem(STORAGE_KEY_LEASE);
-          if (raw) {
-            const l: LeaseData = JSON.parse(raw);
-            if (l.ownerId === clientId) {
-              storage.removeItem(STORAGE_KEY_LEASE);
-            }
-          }
-        } catch {}
-      }
-    }
-
-    // Contention timeout: check one last time if a sibling completed refresh
-    const finalRefresh = getStoredRefreshEpoch();
-    const finalStatus = getStoredRefreshStatus();
-    if (dispatchEpoch && finalRefresh > dispatchEpoch && finalStatus === 'success') {
-      lastSuccessfulRefreshTime = performance.now();
-      return true;
-    }
-
-    // Fail closed safely
-    setStoredRefreshStatus('failed');
-    if (broadcastChannel) {
-      try {
-        broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
-      } catch {}
-    }
-    if (authFailureHandler) {
-      authFailureHandler();
-    }
-    return false;
-  } finally {
-    try { storage.removeItem(ticketKey); } catch {}
   }
 }
 
@@ -399,14 +350,25 @@ async function executeLocalStorageFallbackRefresh(dispatchEpoch?: number): Promi
  * do not trigger concurrent refresh operations, avoiding server-side token reuse / theft detection.
  *
  * Tier 1: Uses the W3C Web Locks API (navigator.locks) when available to serialize execution across tabs.
- * Tier 2: Falls back to Staged Two-Phase Ticket Election in localStorage when Web Locks are absent.
- * Fail-Closed: If safe coordination cannot be established, fails closed safely without uncoordinated network requests.
+ * Fail-Closed Invariant: In environments lacking the Web Locks API (e.g. non-secure HTTP, restricted iframes,
+ * or legacy engines), multi-tab mutual exclusion cannot be proven without an atomic CAS primitive.
+ * Rather than risking concurrent refresh requests and session family theft revocation, the client fails closed safely.
  */
 export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boolean> {
+  // If user has explicitly logged out, reject immediately
+  if (getStoredRefreshStatus() === 'logged_out') {
+    if (authFailureHandler) {
+      authFailureHandler();
+    }
+    return false;
+  }
+
   // If a refresh operation is already in-flight in THIS execution context, return existing promise
   if (refreshPromise) {
     return refreshPromise;
   }
+
+  const queueCounter = getStoredRefreshCounter();
 
   refreshPromise = (async () => {
     try {
@@ -427,9 +389,10 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
               clearTimeout(timeoutId);
 
               // Check if another tab completed refresh while we were waiting for the lock
-              const storedRefresh = getStoredRefreshEpoch();
-              const storedStatus = getStoredRefreshStatus();
-              if (dispatchEpoch && storedRefresh > dispatchEpoch && storedStatus === 'success') {
+              if (
+                getStoredRefreshCounter() > queueCounter ||
+                isSiblingRefreshValid(dispatchEpoch)
+              ) {
                 lastSuccessfulRefreshTime = performance.now();
                 return true;
               }
@@ -443,9 +406,10 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
           // DO NOT execute an uncoordinated direct refresh, as doing so bypasses mutual exclusion
           // and risks concurrent token rotation and session family theft revocation.
           // First, check whether another tab successfully completed refresh in the interim:
-          const storedRefresh = getStoredRefreshEpoch();
-          const storedStatus = getStoredRefreshStatus();
-          if (dispatchEpoch && storedRefresh > dispatchEpoch && storedStatus === 'success') {
+          if (
+            getStoredRefreshCounter() > queueCounter ||
+            isSiblingRefreshValid(dispatchEpoch)
+          ) {
             lastSuccessfulRefreshTime = performance.now();
             return true;
           }
@@ -455,7 +419,7 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
           if (broadcastChannel) {
             try {
               broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
-            } catch {}
+            } catch { }
           }
           if (authFailureHandler) {
             authFailureHandler();
@@ -464,9 +428,23 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
         }
       }
 
-      // 2. Tier-2: Fallback for environments without Web Locks API
-      // Uses Staged Two-Phase Ticket Election Lease in localStorage
-      return await executeLocalStorageFallbackRefresh(dispatchEpoch);
+      // 2. Tier-2: When Web Locks API is unavailable
+      // Without browser-engine-level mutual exclusion or an atomic compare-and-swap primitive,
+      // multi-tab mutual exclusion cannot be guaranteed against preemption or tab suspension races.
+      // Fail closed safely rather than risking concurrent refresh requests and session family theft revocation.
+      console.warn(
+        '[Orbit Auth] Web Locks API (navigator.locks) is unavailable. Failing closed safely to prevent uncoordinated multi-tab token rotation.'
+      );
+      setStoredRefreshStatus('failed');
+      if (broadcastChannel) {
+        try {
+          broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
+        } catch {}
+      }
+      if (authFailureHandler) {
+        authFailureHandler();
+      }
+      return false;
     } finally {
       refreshPromise = null;
     }
@@ -479,24 +457,32 @@ export interface ApiRequestOptions extends RequestInit {
   _retry?: boolean;
 }
 
+/**
+ * Universal Authenticated API Request Wrapper.
+ * - Injects 'X-Organization-ID' header when currentOrgId is active.
+ * - Injects 'X-Requested-With: XMLHttpRequest' for CSRF protection.
+ * - Sends credentials: 'include' for ambient HTTP-only cookies.
+ * - Catches 401 Unauthorized responses and performs coordinated token refresh.
+ * - In-tab and cross-tab stale 401 interception: if another tab already completed
+ *   a valid refresh after this request was sent, retries immediately without re-refreshing.
+ * - Retries the original failed request exactly once upon successful refresh.
+ */
 export async function apiRequest<T>(
   endpoint: string,
   options: ApiRequestOptions = {}
 ): Promise<T> {
   const requestDispatchTime = performance.now();
   const requestDispatchEpoch = Date.now();
-  const headers = new Headers(options.headers || {});
-  headers.set('Content-Type', 'application/json');
+  const requestCounter = getStoredRefreshCounter();
 
-  // Attach X-Requested-With custom header for CSRF defense on state mutations
-  if (options.method && options.method.toUpperCase() !== 'GET') {
-    if (!headers.has('X-Requested-With')) {
-      headers.set('X-Requested-With', 'XMLHttpRequest');
-    }
-  }
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Requested-With': 'XMLHttpRequest', // CSRF guard verification
+    ...((options.headers as Record<string, string>) || {}),
+  };
 
-  if (currentOrgId && !headers.has('X-Organization-Id')) {
-    headers.set('X-Organization-Id', currentOrgId);
+  if (currentOrgId && !headers['X-Organization-ID']) {
+    headers['X-Organization-ID'] = currentOrgId;
   }
 
   const response = await fetch(endpoint, {
@@ -522,9 +508,10 @@ export async function apiRequest<T>(
     }
 
     // 2. Cross-tab stale 401 check: did another tab already refresh after this request was sent?
-    const storedRefresh = getStoredRefreshEpoch();
-    const storedStatus = getStoredRefreshStatus();
-    if (storedRefresh > requestDispatchEpoch && storedStatus === 'success') {
+    if (
+      getStoredRefreshCounter() > requestCounter ||
+      isSiblingRefreshValid(requestDispatchEpoch)
+    ) {
       lastSuccessfulRefreshTime = performance.now();
       return apiRequest<T>(endpoint, {
         ...options,

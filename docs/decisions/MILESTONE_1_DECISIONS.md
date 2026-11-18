@@ -208,6 +208,29 @@ Diagnostic execution of `python .agents/skills/gravitas/scripts/doctor.py` confi
     3. Both pages recover their protected requests successfully without session revocation.
     4. Replaying a consumed refresh token triggers server-side theft detection and session family revocation.
 
+### Decision 20: Concurrency Proof & Replacement of localStorage Staged Election with Provable Fail-Closed Web Locks Architecture and Session Correlation
+- **Context:** Formal adversarial analysis revealed that the `localStorage` staged candidate-ticket election algorithm cannot guarantee mutual exclusion under arbitrary thread/process preemption, background tab throttling, or tab suspension. Specifically, if Tab A wins, commits its lease, and removes its candidate ticket, Tab B (resuming from preemption) scans tickets, sees only its own ticket, assumes it won, overwrites Tab A's lease, and issues a concurrent refresh request. Because `localStorage` lacks an atomic Compare-And-Swap (CAS) primitive, any time-based lease can be violated. Concurrent refresh requests trigger server-side `THEFT_DETECTED` revocation, destroying the entire session family. Furthermore, generic timestamp/status markers lacked user/session correlation, allowing potential cross-session reuse across account switches.
+- **Decision:**
+  - **20.1 Formal Proof of localStorage Election Inadequacy:** Acknowledge and document that without atomic CAS or OS/browser kernel synchronization, no distributed lease in `localStorage` can prevent dual-owner execution under adversarial scheduling. Option D is permanently rejected.
+  - **20.2 Authoritative Architecture Selection (Option A — Web Locks API + Strict Fail-Closed Safety):**
+    - **Primary Mechanism:** W3C Web Locks API (`navigator.locks`) is the sole authoritative mechanism for cross-tab refresh serialization. It is enforced at the browser engine process level across all tabs, iframes, and workers for the origin, with automatic cleanup on tab crash/termination, zero dual-lease risk, and 98%+ global browser availability.
+    - **Fail-Closed Policy When Web Locks Are Unavailable:** In environments lacking `navigator.locks` (non-secure HTTP contexts, restricted `<iframe>` sandboxes, or legacy browsers), the client **fails closed safely**. It logs an explicit security notice, records status `'failed'`, invokes `authFailureHandler()`, and returns `false`. It NEVER executes uncoordinated network refresh requests that would risk token rotation races and catastrophic session revocation. A user re-authenticating on an unsupported browser is strictly preferred over silent session family destruction.
+  - **20.3 Session Correlation Invariant:**
+    - To prevent cross-session contamination (e.g. Tab 1 logging out of User A and logging in as User B while Tab 2 has an in-flight request for User A), coordination state must track a non-sensitive `sessionCorrelation` object: `{ userId: string, sessionEpoch: number }`.
+    - When a tab receives a 401 and checks if a sibling tab completed refresh, it verifies that the stored `userId` matches the current tab's active user identity. Mismatches fail closed immediately.
+    - On logout (`resetClientState()`): all stored epochs, status markers, and session correlations are cleared; status is set to `'logged_out'`; and `ORBIT_LOGOUT` is broadcast via `BroadcastChannel`. Sibling tabs listening immediately clear their in-memory state and trigger auth failure.
+  - **20.4 Deterministic Adversarial Concurrency Test Suite:**
+    - Add unit tests modeling the exact preemption race schedules (candidate removed before contender arbitrates, concurrent lease writes, lease TTL expiration under tab suspension, stale owner resuming after lease expiration, old owner releasing new lease, storage failure mid-operation, failed refresh propagation).
+    - Assert that under all adversarial schedules, concurrent network refreshes NEVER occur, and the system fails closed cleanly.
+  - **20.5 Multi-Trial Real Multi-Page Browser Stress Testing:**
+    - Expand the Playwright browser test suite to run 10 repeated concurrent trials with 2, 3, and 4 simultaneous tabs.
+    - Verify delayed responses, tab closure during lock holding (verifying native automatic lock release), missing Web Locks (verifying clean fail-closed behavior without uncoordinated requests), account switch / logout races, and replayed token theft detection in real headless Chrome.
+    - Make browser binary discovery cross-platform (`CHROME_BIN`, system Chrome/Edge/Chromium paths on Linux/macOS/Windows) with clear failure messaging when no binary is found.
+  - **20.6 Database Role Boundary Hardening:**
+    - In `docker-compose.yml`, enforce explicit environment variable injection and remove silent production fallbacks.
+    - In `docker/postgres/init-roles.sql`, add a fail-fast validation check preventing predictable default passwords from being applied if `NODE_ENV` is `production` or `staging`.
+
+
 ---
 
 ## 3. Staged Implementation Plan
