@@ -67,3 +67,7 @@ This document records the architectural and engineering decisions for **Mileston
   - **24.3 Navigation Integration:**
     - Extend `Navbar.tsx` with view tabs (`Inbox` and `Channels & Settings`).
     - Extend `App.tsx` to switch seamlessly between `InboxPage` and `DashboardPage`.
+  - **24.4 Verification & Evidence:**
+    - Test Suite: 140/140 tests passing across 12 test files (`tests/integration/inbox-api.spec.ts` 12 integration tests covering master-detail query shapes, channel filtering, status mutations, message sending, and strict cross-tenant isolation).
+    - CI Evidence: GitHub Actions Run `#44276052332` on commit `ffe4903` passed all 17 workflow steps.
+    - Status: VERIFIED.
