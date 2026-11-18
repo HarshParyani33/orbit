@@ -143,7 +143,7 @@ This document records the architectural and engineering decisions for **Mileston
 
 ## Decision 33: Message Media Attachments & Multi-Tenant Storage Abstraction (Milestone 3 Slice 3.4)
 
-- **Status:** APPROVED & IN IMPLEMENTATION
+- **Status:** APPROVED & VERIFIED (Commit `49e1826`, CI Run `44331187274`)
 - **Date:** 2026-11-18
 - **Context:**
   Milestone 3 Slice 3.4 introduces unified media attachment support and multi-tenant file storage to Project Orbit.
@@ -178,13 +178,17 @@ This document records the architectural and engineering decisions for **Mileston
      - `DELETE /api/conversations/:id/messages/:messageId/attachments/:attachmentId`:
        - Soft-deletes attachment record (`deleted_at = NOW()`).
 
-- **Evidence & Verification Plan:**
+- **Evidence & Verification:**
   - Database migration `20261118000005_message_attachments` applied and RLS verified.
   - Storage provider unit/integration tests verifying path traversal prevention and upload/download/delete lifecycle.
-  - HTTP integration tests verifying:
+  - HTTP integration tests in `tests/integration/media-attachments.spec.ts` (16 tests) verifying:
     - Successful attachment upload, metadata persistence, and file download.
     - Path traversal attack attempts rejected with security error.
     - Malicious or unapproved MIME types rejected with 400 Bad Request.
     - File size limit exceeding 10MB rejected with 400 Bad Request.
     - Cross-tenant attachment access blocked by PostgreSQL RLS.
-    - Real-time WebSocket event emission on upload.
+    - Automatic inclusion of attachments in conversation queries.
+    - Soft-deletion lifecycle.
+  - Full test suite: 242/242 tests passing across all 21 suites.
+  - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
+  - **GitHub Actions CI Verification:** [CI Run #44331187274](https://github.com/HarshParyani33/orbit/actions/runs/44331187274) completed with conclusion `success` across all 17 pipeline steps.
