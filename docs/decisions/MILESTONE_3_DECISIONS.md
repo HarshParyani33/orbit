@@ -99,7 +99,7 @@ This document records the architectural and engineering decisions for **Mileston
 
 ## Decision 32: Meta Instagram Inbound Webhook Processing & Channel Adapter (Milestone 3 Slice 3.3)
 
-- **Status:** APPROVED & IN IMPLEMENTATION
+- **Status:** APPROVED & VERIFIED (Commit `828bc97`, CI Run `44326573018`)
 - **Date:** 2026-11-18
 - **Context:**
   Milestone 3 Slice 3.3 introduces full two-way Meta Instagram Messaging integration to Project Orbit.
@@ -128,10 +128,13 @@ This document records the architectural and engineering decisions for **Mileston
      - In `ConversationsService.createMessage`: if `senderType === 'AGENT'` and channel is `META_INSTAGRAM`, invokes adapter and records outbound message dispatch.
 
 - **Evidence & Verification:**
-  - Automated integration tests covering:
+  - Automated integration tests in `tests/integration/instagram-channel.spec.ts` covering:
     - Inbound Instagram DM message parsing, customer identity creation, and thread creation.
     - Customer thread continuity: multiple messages from the same IGSID append to the same thread.
     - Re-opening snoozed conversations on user reply.
     - Automation engine trigger and real-time event dispatch.
     - Outbound agent message dispatch via Instagram adapter.
     - Multi-tenant RLS isolation.
+  - Full test suite: 226/226 tests passing across all 20 suites.
+  - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
+  - **GitHub Actions CI Verification:** [CI Run #44326573018](https://github.com/HarshParyani33/orbit/actions/runs/44326573018) completed with conclusion `success` across all 17 pipeline steps.
