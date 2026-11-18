@@ -1,14 +1,14 @@
 # PROJECT ORBIT — FINAL MILESTONE 1 REVIEW & VERIFICATION
-## Final Security Hardening, Verification & Quality Sign-Off
+## Final Security Hardening, Multi-Tab Browser Verification & Quality Sign-Off
 
-**Document ID:** `M1-FINAL-20261108-AUTONOMOUS-CLOSURE`  
+**Document ID:** `M1-FINAL-20261118-BROWSER-VERIFIED`  
 **Milestone:** `Milestone 1 — Foundation, Multi-Tenant Security, Authentication & Minimal Dashboard`  
 **Execution Date:** `2026-11-18`  
 **Architectural Contract:** `docs/ARCHITECTURE.md` v1.1.5  
 **Governance Runtime:** `Gravitas Core Skill Mode (6 Invariants Strictly Enforced)`  
 **Repository:** `HarshParyani33/orbit`  
 **Working Branch:** `main`  
-**Final Verdict:** **APPROVED & FULLY VERIFIED — MILESTONE 1 COMPLETE (READY FOR MILESTONE 2)**
+**Final Verdict:** **MILESTONE 1 CORRECTIONS VERIFIED**
 
 ---
 
@@ -34,13 +34,13 @@ $ python .agents/skills/gravitas/scripts/doctor.py
 
 - **Active Mode:** **Core Skill Mode** (prompt-based behavioral discipline, decision records, evidence-backed verification).
 - **Enforced Invariants:** All six Gravitas invariants strictly governed this final verification and hardening pass:
-  1. *Ground before mutating:* Inspected Docker containers, WSL2 network bindings, NestJS CORS config, Prisma schema, and client fetch interceptors before touching files.
+  1. *Ground before mutating:* Inspected Docker containers, WSL2 network bindings, NestJS CORS config, Prisma schema, Playwright headless Chrome integration, and client fetch interceptors before touching files.
   2. *Stay in declared scope:* Confined strictly to Milestone 1 findings; zero premature implementation of Milestone 2 features (no WhatsApp/Instagram Graph API webhooks, no Stripe webhooks, no AI inference).
-  3. *Completion needs fresh evidence:* Every finding verified by automated test suites executed against live PostgreSQL 16, a real NestJS HTTP server on TCP, and simulated browser execution contexts.
-  4. *Never exact-retry a failure:* Diagnosed esbuild decorator reflection behavior, Navigator property descriptors, config cache memoization, and CORS preflight semantics prior to finalizing implementations.
+  3. *Completion needs fresh evidence:* Every finding verified by automated test suites executed against live PostgreSQL 16, a real NestJS HTTP server on TCP, simulated browser execution contexts, and genuine multi-tab headless Chrome.
+  4. *Never exact-retry a failure:* Diagnosed Node.js `localStorage` reference scope, `request.get` vs `request.headers` in mock contexts, and Playwright session counting before finalizing implementations.
   5. *Satisfy the established contract:* Adhered to `docs/ARCHITECTURE.md` v1.1.5 without deviation.
-  6. *Say what cannot be verified:* Explicitly documented the 15-minute stateless JWT lifetime window, browser SOP dependency for custom header CSRF defense, simulated execution contexts vs real multi-process browser testing, and deferred live webhook ingestion.
-- **Decision Records:** Recorded Decisions 1 through 18 in `docs/decisions/MILESTONE_1_DECISIONS.md`.
+  6. *Say what cannot be verified:* Explicitly documented the 15-minute stateless JWT lifetime window, browser SOP dependency for custom header CSRF defense, and deferred live webhook ingestion.
+- **Decision Records:** Recorded Decisions 1 through 19 in `docs/decisions/MILESTONE_1_DECISIONS.md`.
 
 ---
 
@@ -50,9 +50,9 @@ $ python .agents/skills/gravitas/scripts/doctor.py
 |---|:---:|---|---|---|---|:---:|
 | **Finding 1** | P1 | Multi-Tenant IDOR | Route parameter `:id` in `GET /api/organizations/:id` was not reconciled against tenant context. | `TenantGuard` verifies route parameter matches header; controller verifies `orgId === tenant.orgId`. | `tests/integration/security-pass.spec.ts` | **RESOLVED** |
 | **Finding 2** | P1 | Authentication / Race | Refresh token rotation was non-atomic outside an exclusive row lock, risking concurrent token rotation. | Interactive transaction with PostgreSQL `SELECT ... FOR UPDATE OF s` row locking; immediate family revocation on reuse. | `tests/integration/security-pass.spec.ts`, `tests/integration/auth.spec.ts` | **RESOLVED** |
-| **Finding 3** | P1 | Web Security / CSRF | Missing CORS preflight allowed header `X-Requested-With`; `Sec-Fetch-Site: cross-site` bypass risk. | Refactored `configureApp(app)` with explicit CORS allowedHeaders; hardened `CsrfGuard` to strictly reject cross-site mutations. | `tests/integration/http-cors-csrf.spec.ts` | **RESOLVED** |
+| **Finding 3** | P1 | Web Security / CSRF | Missing CORS preflight allowed header `X-Requested-With`; `Sec-Fetch-Site: cross-site` bypass risk. | Refactored `configureApp(app)` with explicit CORS allowedHeaders; hardened `CsrfGuard` with same-origin host check and cross-site rejection. | `tests/integration/http-cors-csrf.spec.ts` | **RESOLVED** |
 | **Finding 4** | P1 | Configuration / Secrets | Startup lacked fail-fast production config validation; hardcoded JWT secrets in `app.module.ts`. | Enforced `getConfig()` in `main.ts` before bootstrap; validated 32-char production secrets with default-rejection rules. | `tests/unit/config-jwt.spec.ts` | **RESOLVED** |
-| **Finding 5** | P1 | Frontend / Concurrency | Independent browser tabs lacked mutex for token refresh, risking concurrent refresh and family revocation. | Implemented Web Locks API (`navigator.locks`) with shared storage epoch; fail-closed mutual exclusion on abort/timeout. | `tests/unit/cross-tab-refresh.spec.ts` | **RESOLVED** |
+| **Finding 5** | P1 | Cross-Tab Concurrency | Independent browser tabs lacked mutex for token refresh, and the fallback without Web Locks made uncoordinated network calls. | Tier-1: Web Locks API (`navigator.locks`). Tier-2: Staged Two-Phase Ticket Election in `localStorage` with fail-closed safety and stale lease recovery. | `tests/unit/cross-tab-refresh.spec.ts`, `tests/browser/cross-tab-refresh.browser.spec.ts` | **RESOLVED** |
 | **Finding 6** | P1 | API Bootstrap | `apps/api/src/main.ts` invoked `app.listen()` twice (port fallback + config port), bypassing configuration validation. | Enforced `config.PORT` as sole port source; invoked `app.listen(config.PORT)` exactly once; added `createApp()` export. | `tests/integration/bootstrap.spec.ts` | **RESOLVED** |
 | **Finding 7** | P2 | Database Provisioning | `init-roles.sql` contained hardcoded passwords in `CREATE ROLE` blocks, risking accidental reuse in production. | Sanitized role creation to use `CREATE ROLE ... WITH LOGIN`; injected passwords dynamically via `\getenv` and literal interpolation. | `tests/integration/security-pass.spec.ts` | **RESOLVED** |
 | **Finding 8** | P2 | Registration Atomicity | Multi-step user, organization, membership, and session creation risked orphaned records on failure. | Wrapped registration in `prisma.$transaction`; rolled back completely on failure with zero orphaned rows. | `tests/integration/security-pass.spec.ts` | **RESOLVED** |
@@ -62,103 +62,128 @@ $ python .agents/skills/gravitas/scripts/doctor.py
 
 ## 3. Detailed Technical Review of Key Corrections
 
-### 3.1 API Bootstrap Double Listen Bug Resolution
-- **File:** `apps/api/src/main.ts`
-- **Issue:** Prior code called `app.listen(port)` (where `port = process.env.PORT || 4000`) and subsequently called `app.listen(config.PORT)`, creating an unhandled double-listen condition and bypassing validated configuration.
-- **Correction:**
-  - `getConfig()` is invoked first to enforce fail-fast validation before any application instantiation.
-  - `createApp()` exports the un-bound application configured with `configureApp(app)` for test inspection.
-  - `bootstrap()` invokes `await app.listen(config.PORT)` **exactly once**.
-  - Verified by `tests/integration/bootstrap.spec.ts` proving single-listen execution and fail-fast termination before server creation on invalid configuration.
+### 3.1 Tier-1 & Tier-2 Cross-Tab Refresh Coordination Architecture
+- **Files:** `apps/web/src/api/client.ts`, `tests/unit/cross-tab-refresh.spec.ts`, `tests/browser/cross-tab-refresh.browser.spec.ts`
+- **Issue:** When W3C Web Locks API was unavailable, `client.ts` previously fell back directly to `executeSingleFlightRefresh()`. In multi-tab environments without Web Locks, concurrent tabs sharing the same HTTP-only refresh cookie would submit simultaneous refresh requests. The server's `FOR UPDATE OF s` row locking would serialize them; the second request would hit `is_revoked = true` and trigger emergency session family theft revocation, logging the user out.
+- **Corrective Engineering:**
+  - **Tier 1 (Preferred):** Web Locks API (`navigator.locks.request('orbit_auth_refresh_lock', ...)`) provides browser-native kernel-level mutex across tabs with automatic crash cleanup.
+  - **Tier 2 (Fallback):** Staged Two-Phase Ticket Election in `localStorage`:
+    1. Pre-flight check: Inspect `orbit_auth_refresh_lease`. If held by an active tab (`expiresAt > Date.now()`), sleep and wait.
+    2. Phase 1 (Post Candidate Ticket): Contender writes unique ticket `orbit_auth_candidate_${clientId}` with timestamp and priority hash.
+    3. Phase 2 (Arbitration Window): Contender sleeps 40-65ms jitter window, allowing all concurrent contenders across tabs to write tickets.
+    4. Phase 3 (Deterministic Winner Election): Contender reads all active tickets, sorting by lowest timestamp/priority. If another tab won, yield ticket, sleep, and monitor winner.
+    5. Phase 4 (Winner Commit & Execution): Winner acquires lease (`expiresAt = Date.now() + 6000ms`), executes `executeSingleFlightRefresh()`, updates `storedRefreshEpoch`, and releases lease.
+    6. Stale Lease Recovery: If a winner crashes or closes mid-refresh, waiting tabs detect `expiresAt <= Date.now()` after 6000ms TTL and reclaim the lease.
+  - **Fail-Closed Guarantee:** If neither Web Locks nor `localStorage` is functional (e.g. storage disabled, private browsing security error), or if coordination times out, the client **fails closed safely** (`setStoredRefreshStatus('failed')`, notifies `authFailureHandler()`, returns `false`). It never makes an uncoordinated network refresh that risks token reuse revocation.
+  - **Zero Token Disclosure:** Storage and broadcast channels strictly contain non-sensitive integer timestamps, status strings, or random lease UUIDs. No access tokens, refresh tokens, or cookies are ever stored in `localStorage` or `BroadcastChannel`.
 
-### 3.2 Cross-Tab Refresh Coordination & Fail-Closed Mutex
-- **Files:** `apps/web/src/api/client.ts`, `tests/unit/cross-tab-refresh.spec.ts`
-- **Issue:** If lock acquisition failed or timed out, the catch block previously fell back to executing `executeSingleFlightRefresh()` directly. This bypassed the cross-tab mutual exclusion lock, allowing concurrent tabs to rotate tokens simultaneously and trigger server-side token theft revocation.
-- **Correction:**
-  - Removed the unsafe direct-refresh fallback.
-  - On lock timeout or abort:
-    1. Inspect whether a sibling tab completed refresh in the interim (`storedRefresh > dispatchEpoch` or `Date.now() - storedRefresh < 1500`).
-    2. If so, safely reuse the ambient rotated cookies and return `true`.
-    3. If no sibling completed refresh, **fail closed safely**: mark status as `'failed'`, invoke `authFailureHandler()`, and return `false`. Never execute an uncoordinated network refresh!
-  - Verified by `tests/unit/cross-tab-refresh.spec.ts` (6 tests) covering normal serialization, interim sibling completion, aborted lock fail-closed behavior, and zero credential leakage.
+### 3.2 Real Multi-Tab Browser Verification (Playwright & Headless Chrome)
+- **Files:** `tests/browser/cross-tab-refresh.browser.spec.ts`
+- **Execution:** Headless Google Chrome (`v157.0.8103.79`) on Windows with two independent browser pages sharing a single browser context with shared cookies.
+- **Verified Scenarios:**
+  1. *Scenario 1 (Web Locks Enabled):* Two independent tabs simultaneously receive 401 on protected requests. Web Locks serializes execution: **exactly 1** `/api/auth/refresh` request is made. Both tabs recover with 200 OK. Database session family remains healthy (1 active rotated session, 1 consumed session, 0 theft revocations).
+  2. *Scenario 2 (Web Locks Disabled / Tier-2 Fallback):* Two independent tabs with `delete window.navigator.locks` simultaneously receive 401. Two-phase ticket election serializes execution in real Chrome: **exactly 1** `/api/auth/refresh` request is made. Both tabs recover with 200 OK.
+  3. *Scenario 3 (Server Replay Detection):* Replaying a consumed refresh token directly from Chrome triggers the server's PostgreSQL row locking, returns 401 with theft alert, and immediately revokes all sessions in the family in PostgreSQL.
 
-### 3.3 Database Role Provisioning Sanitization & Security Boundary
+### 3.3 Database Role Initialization & Privilege Verification
 - **Files:** `docker/postgres/init-roles.sql`, `docker-compose.yml`, `tests/integration/security-pass.spec.ts`
-- **Issue:** `init-roles.sql` contained hardcoded passwords inside `CREATE ROLE` blocks, which conflicted with dynamic `ALTER ROLE ... WITH PASSWORD :'var'` statements.
-- **Correction:**
-  - Cleaned up `CREATE ROLE` blocks to instantiate roles with `LOGIN` and least-privilege flags (`NOSUPERUSER`, `NOBYPASSRLS` for app/ingress) without hardcoded passwords.
-  - Applied dynamic environment-driven credentials via `psql` `\getenv` and safe literal interpolation (`ALTER ROLE ... WITH PASSWORD :'var'`).
-  - Added explicit security boundary notices in `init-roles.sql` stating that the script is strictly for local containerized development and CI, while cloud-managed IAM / KMS must be used in production.
-  - Verified by `tests/integration/security-pass.spec.ts` asserting no hardcoded passwords in role creation statements.
+- **Verification:** Executed PostgreSQL catalog queries on live database:
+  - `orbit_migrator`: `rolsuper = false`, `rolbypassrls = true`, `rolcanlogin = true`.
+  - `orbit_app`: `rolsuper = false`, `rolbypassrls = false`, `rolcanlogin = true`.
+  - `orbit_ingress`: `rolsuper = false`, `rolbypassrls = false`, `rolcanlogin = true`, and `SELECT count(*) FROM information_schema.table_privileges WHERE grantee = 'orbit_ingress'` = **0** (zero table privileges).
+  - Sanitized `init-roles.sql` to instantiate roles without hardcoded passwords in `CREATE ROLE` statements, setting passwords strictly via `\getenv` literal interpolation.
 
 ---
 
-## 4. Complete Test Taxonomy Breakdown
+## 4. Distinct Test Taxonomy & Verification Results
 
 ```text
 ========================================================================================
-ORBIT COMPLETE TEST TAXONOMY (94 Tests Across 9 Files — 0 Failures)
+PROJECT ORBIT — DISTINCT TEST TAXONOMY (100 Tests Across 10 Files — 0 Failures)
 ========================================================================================
 
-1. Real Database Role & Least-Privilege Tests (11 tests)
+1. Real Database Role & Least-Privilege Tests (11 tests against live PostgreSQL 16 on Docker)
    - tests/integration/db-permissions.spec.ts
-   - Executed against live PostgreSQL 16 on Docker/WSL2
-   - Proves orbit_app (NOSUPERUSER, NOBYPASSRLS, DDL blocked, Category B read-only, Category C zero access)
-   - Proves orbit_ingress (zero table access, Security Definer resolution authorized)
+   - orbit_app: NOSUPERUSER, NOBYPASSRLS, DDL blocked, Category B read-only, Category C zero access
+   - orbit_ingress: ZERO table access, Security Definer resolution authorized
 
-2. Real Database Tenant Isolation & RLS Tests (7 tests)
+2. Real Database Tenant Isolation & RLS Tests (7 tests against live PostgreSQL 16 on Docker)
    - tests/integration/tenant-isolation.spec.ts
-   - Executed against live PostgreSQL 16 on Docker/WSL2
-   - Proves cross-tenant reads blocked (0 rows), cross-tenant updates blocked (0 rows)
-   - Proves cross-tenant inserts throw 42501 RLS policy violation
-   - Proves missing tenant context fails closed, connection pool SET LOCAL cleanup on commit
+   - Cross-tenant reads blocked (0 rows), cross-tenant updates blocked (0 rows)
+   - Cross-tenant inserts throw 42501 RLS policy violation
+   - Missing tenant context fails closed, connection pool SET LOCAL cleanup on commit
 
-3. Real Database Authentication & Session Lifecycle Tests (11 tests)
+3. Real Database Authentication & Session Lifecycle Tests (11 tests against live PostgreSQL 16)
    - tests/integration/auth.spec.ts
-   - Executed against live PostgreSQL 16 on Docker/WSL2
-   - Proves Argon2id password hashing, session creation, single-thread rotation, theft detection
+   - Argon2id password hashing, session creation, single-thread rotation, theft detection
 
-4. Real Database Concurrency & Rollback Tests (7 tests)
+4. Real Database Concurrency & Rollback Tests (7 tests against live PostgreSQL 16)
    - tests/integration/security-pass.spec.ts (DB subset)
-   - Executed against live PostgreSQL 16 on Docker/WSL2
-   - Proves SELECT ... FOR UPDATE row locking & parallel theft revocation
-   - Proves atomic registration rollback (0 orphaned records on failure), suspended tenant lifecycle
+   - SELECT ... FOR UPDATE row locking & parallel theft revocation
+   - Atomic registration rollback (0 orphaned records on failure), suspended tenant lifecycle
 
-5. Real HTTP CORS, CSRF & Bootstrap Pipeline Integration Tests (13 tests)
+5. Real HTTP CORS, CSRF & Bootstrap Pipeline Network Tests (13 tests over TCP socket)
    - tests/integration/http-cors-csrf.spec.ts (10 tests)
    - tests/integration/bootstrap.spec.ts (3 tests)
-   - Executed over TCP against live NestJS application instances
-   - Proves preflight allowed/untrusted origin, credentials, allowedHeaders including X-Requested-With
-   - Proves Sec-Fetch-Site: cross-site 403 rejection, Origin whitelist 403, missing context 403
-   - Proves custom header without Origin acceptance: X-Requested-With (200), X-CSRF-Token (200)
-   - Proves bootstrap single listen on config.PORT and fail-fast startup config validation
+   - Preflight allowed/untrusted origin, credentials, allowedHeaders including X-Requested-With
+   - Sec-Fetch-Site: cross-site 403 rejection, Origin whitelist 403, missing context 403
+   - Custom header without Origin acceptance: X-Requested-With (200), X-CSRF-Token (200)
+   - Same-origin request acceptance via protocol and host alignment
+   - Bootstrap single listen on config.PORT, fail-fast startup config validation before socket binding
 
-6. Simulated Browser Execution Context Tests (6 tests)
-   - tests/unit/cross-tab-refresh.spec.ts (6 tests)
-   - Executed in Vitest under simulated execution contexts and Web Locks API mocks/spies
-   - Proves concurrent tab Web Locks serialization, cross-tab stale 401 interception via storage epoch
-   - Proves fail-closed handling on lock abort/timeout, interim sibling completion reuse, zero credential leakage
+6. Real Multi-Tab Browser Integration Tests (3 tests in Headless Google Chrome v157)
+   - tests/browser/cross-tab-refresh.browser.spec.ts (3 tests)
+   - Two independent browser pages sharing single context and cookies
+   - Concurrent 401s under Web Locks: exactly 1 network refresh, both tabs recover
+   - Concurrent 401s with Web Locks deleted (Tier-2 Fallback): exactly 1 network refresh, both recover
+   - Server-side token reuse replay detection: replayed token triggers family revocation in PostgreSQL
 
-7. Client Single-Flight Refresh Concurrency Unit Tests (6 tests)
+7. Simulated Browser Execution Context Tests (9 tests in Vitest with Web Locks API mocks)
+   - tests/unit/cross-tab-refresh.spec.ts (9 tests)
+   - Concurrent tab Web Locks serialization, cross-tab stale 401 interception via storage epoch
+   - Fail-closed handling on lock abort/timeout, interim sibling completion reuse
+   - Tier-2 localStorage two-phase election, storage failure fail-closed safety, stale lease recovery
+   - Security contract: zero sensitive credentials or tokens disclosed in storage
+
+8. Client Single-Flight Refresh Concurrency Unit Tests (6 tests)
    - tests/unit/client-refresh.spec.ts (6 tests)
-   - Proves in-tab single-flight deduplication, atomic queue retry, auth failure handling, monotonic stale 401 interception
+   - In-tab single-flight deduplication, atomic queue retry, monotonic stale 401 interception
 
-8. JWT Secret Enforcement & Fail-Fast Configuration Unit Tests (8 tests)
+9. JWT Secret Enforcement & Fail-Fast Configuration Unit Tests (8 tests)
    - tests/unit/config-jwt.spec.ts (8 tests)
-   - Proves production missing/weak/default secret rejection, dev defaults, signing/verification parity
+   - Production missing/weak/default secret rejection, dev defaults, signing/verification parity
 
-9. Application Guard, RBAC & Security Config Unit Tests (25 tests)
+10. Application Guard, RBAC & Security Config Unit Tests (25 tests)
    - tests/integration/security-pass.spec.ts (Unit subset - 25 tests)
-   - Proves route param vs header IDOR mismatch rejection, CsrfGuard complete matrix
-   - Proves docker-compose binding and variable validation, .env.example placeholders, init-roles.sql boundary
+   - Route param vs header IDOR mismatch rejection, CsrfGuard complete matrix
+   - docker-compose binding and variable validation, .env.example placeholders, init-roles.sql boundary
 ========================================================================================
 ```
 
 ---
 
-## 5. Fresh Verification Transcripts & Command Outputs
+## 5. Fresh Verification Transcripts
 
-### 5.1 Unit Test Suite (`npm run test:unit`)
+### 5.1 Real Browser Test Suite (`npm run test:browser`)
+```text
+$ npm run test:browser
+> orbit-saas@0.1.0 test:browser
+> vitest run tests/browser
+
+ RUN  v2.1.9 H:/orbit-saas
+
+ ✓ tests/browser/cross-tab-refresh.browser.spec.ts (3 tests) 4393ms
+   ✓ Project Orbit — Real Multi-Tab Browser Cross-Tab Verification > Scenario 1: Real Browser Multi-Tab Refresh with Web Locks API serializes execution to exactly ONE network refresh 1217ms
+   ✓ Project Orbit — Real Multi-Tab Browser Cross-Tab Verification > Scenario 2: Real Browser Multi-Tab Refresh WITHOUT Web Locks (Tier-2 Fallback) serializes execution to exactly ONE network refresh 641ms
+   ✓ Project Orbit — Real Multi-Tab Browser Cross-Tab Verification > Scenario 3: Server Replay Detection Invariant in Real Browser — Replayed Old Token Revokes Session Family 550ms
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  11:26:42
+   Duration  8.21s
+```
+
+### 5.2 Unit Test Suite (`npm run test:unit`)
 ```text
 $ npm run test:unit
 > orbit-saas@0.1.0 test:unit
@@ -166,17 +191,17 @@ $ npm run test:unit
 
  RUN  v2.1.9 H:/orbit-saas
 
- ✓ tests/unit/client-refresh.spec.ts (6 tests) 20ms
- ✓ tests/unit/cross-tab-refresh.spec.ts (6 tests) 45ms
+ ✓ tests/unit/client-refresh.spec.ts (6 tests) 26ms
+ ✓ tests/unit/cross-tab-refresh.spec.ts (9 tests) 221ms
  ✓ tests/unit/config-jwt.spec.ts (8 tests) 24ms
 
  Test Files  3 passed (3)
-      Tests  20 passed (20)
-   Start at  10:59:34
-   Duration  2.34s
+      Tests  23 passed (23)
+   Start at  11:25:59
+   Duration  2.31s
 ```
 
-### 5.2 Integration Test Suite (`npm run test:integration`)
+### 5.3 Integration Test Suite (`npm run test:integration`)
 ```text
 $ npm run test:integration
 > orbit-saas@0.1.0 test:integration
@@ -184,20 +209,20 @@ $ npm run test:integration
 
  RUN  v2.1.9 H:/orbit-saas
 
- ✓ tests/integration/db-permissions.spec.ts (11 tests) 327ms
- ✓ tests/integration/tenant-isolation.spec.ts (7 tests) 267ms
- ✓ tests/integration/auth.spec.ts (11 tests) 1043ms
- ✓ tests/integration/bootstrap.spec.ts (3 tests) 715ms
- ✓ tests/integration/security-pass.spec.ts (32 tests) 1902ms
- ✓ tests/integration/http-cors-csrf.spec.ts (10 tests) 1731ms
+ ✓ tests/integration/db-permissions.spec.ts (11 tests) 259ms
+ ✓ tests/integration/tenant-isolation.spec.ts (7 tests) 234ms
+ ✓ tests/integration/auth.spec.ts (11 tests) 864ms
+ ✓ tests/integration/bootstrap.spec.ts (3 tests) 573ms
+ ✓ tests/integration/security-pass.spec.ts (32 tests) 1649ms
+ ✓ tests/integration/http-cors-csrf.spec.ts (10 tests) 1499ms
 
  Test Files  6 passed (6)
       Tests  74 passed (74)
-   Start at  10:59:45
-   Duration  6.39s
+   Start at  11:26:30
+   Duration  5.36s
 ```
 
-### 5.3 Combined Full Suite (`npm test`)
+### 5.4 Full Combined Test Suite (`npm test`)
 ```text
 $ npm test
 > orbit-saas@0.1.0 test
@@ -205,23 +230,24 @@ $ npm test
 
  RUN  v2.1.9 H:/orbit-saas
 
- ✓ tests/unit/client-refresh.spec.ts (6 tests) 44ms
- ✓ tests/unit/cross-tab-refresh.spec.ts (6 tests) 61ms
- ✓ tests/integration/db-permissions.spec.ts (11 tests) 365ms
- ✓ tests/integration/tenant-isolation.spec.ts (7 tests) 252ms
- ✓ tests/unit/config-jwt.spec.ts (8 tests) 39ms
- ✓ tests/integration/auth.spec.ts (11 tests) 992ms
- ✓ tests/integration/bootstrap.spec.ts (3 tests) 628ms
- ✓ tests/integration/security-pass.spec.ts (32 tests) 1766ms
- ✓ tests/integration/http-cors-csrf.spec.ts (10 tests) 1542ms
+ ✓ tests/unit/client-refresh.spec.ts (6 tests) 38ms
+ ✓ tests/unit/cross-tab-refresh.spec.ts (9 tests) 287ms
+ ✓ tests/integration/db-permissions.spec.ts (11 tests) 451ms
+ ✓ tests/integration/tenant-isolation.spec.ts (7 tests) 295ms
+ ✓ tests/unit/config-jwt.spec.ts (8 tests) 37ms
+ ✓ tests/integration/auth.spec.ts (11 tests) 1037ms
+ ✓ tests/integration/bootstrap.spec.ts (3 tests) 779ms
+ ✓ tests/integration/security-pass.spec.ts (32 tests) 1889ms
+ ✓ tests/integration/http-cors-csrf.spec.ts (10 tests) 1786ms
+ ✓ tests/browser/cross-tab-refresh.browser.spec.ts (3 tests) 4020ms
 
- Test Files  9 passed (9)
-      Tests  94 passed (94)
-   Start at  10:59:58
-   Duration  6.12s
+ Test Files  10 passed (10)
+      Tests  100 passed (100)
+   Start at  11:27:01
+   Duration  9.75s
 ```
 
-### 5.4 TypeScript Strict Typecheck (`npm run typecheck`)
+### 5.5 TypeScript Strict Typecheck (`npm run typecheck`)
 ```text
 $ npm run typecheck
 > orbit-saas@0.1.0 typecheck
@@ -230,7 +256,7 @@ $ npm run typecheck
 (Exit code: 0, zero errors across all 9 workspaces)
 ```
 
-### 5.5 ESLint Monorepo Verification (`npm run lint`)
+### 5.6 ESLint Monorepo Verification (`npm run lint`)
 ```text
 $ npm run lint
 > orbit-saas@0.1.0 lint
@@ -239,7 +265,7 @@ $ npm run lint
 (Exit code: 0, zero errors, zero warnings)
 ```
 
-### 5.6 Production Monorepo Build (`npm run build`)
+### 5.7 Production Monorepo Build (`npm run build`)
 ```text
 $ npm run build
 > orbit-saas@0.1.0 build
@@ -251,14 +277,36 @@ $ npm run build
 > @orbit/ui@0.1.0 build -> tsc --build (PASS)
 > @orbit/validation@0.1.0 build -> tsc --build (PASS)
 > @orbit/api@0.1.0 build -> tsc --build (PASS)
-> @orbit/web@0.1.0 build -> tsc && vite build (PASS - built in 10.21s, 1642 modules transformed)
+> @orbit/web@0.1.0 build -> tsc && vite build (PASS - built in 9.03s, 1642 modules transformed)
 > @orbit/widget@0.1.0 build -> tsc --build (PASS)
 > @orbit/worker@0.1.0 build -> tsc --build (PASS)
 
 (Exit code: 0, all 9 workspaces built cleanly)
 ```
 
-### 5.7 Prisma Migration Status (`npx prisma migrate status`)
+### 5.8 PostgreSQL Catalog Role Queries
+```text
+wsl -d Ubuntu docker exec orbit_postgres psql -U postgres -d orbit_db -c \
+"SELECT rolname, rolsuper, rolbypassrls, rolcanlogin, rolcreatedb, rolcreaterole \
+ FROM pg_roles WHERE rolname IN ('orbit_migrator', 'orbit_app', 'orbit_ingress');"
+
+    rolname     | rolsuper | rolbypassrls | rolcanlogin | rolcreatedb | rolcreaterole 
+----------------+----------+--------------+-------------+-------------+---------------
+ orbit_migrator | f        | t            | t           | f           | f
+ orbit_app      | f        | f            | t           | f           | f
+ orbit_ingress  | f        | f            | t           | f           | f
+(3 rows)
+
+wsl -d Ubuntu docker exec orbit_postgres psql -U postgres -d orbit_db -c \
+"SELECT count(*) FROM information_schema.table_privileges WHERE grantee = 'orbit_ingress';"
+
+ count 
+-------
+     0
+(1 row)
+```
+
+### 5.9 Prisma Migration Status (`npx prisma migrate status`)
 ```text
 $ npx prisma migrate status
 Environment variables loaded from .env
@@ -272,33 +320,36 @@ Database schema is up to date!
 
 ---
 
-## 6. Operating Boundaries & Known Verification Limitations
+## 6. Operating Boundaries & Known Verification Limitations (Invariant 6)
 
-In accordance with Gravitas Invariant 6 (*Say what cannot be verified*):
+In strict compliance with Gravitas Invariant 6 (*Say what you cannot verify*):
 
-1. **Stateless Access Token Window (15 Minutes):**
-   - Access tokens are stateless, signed JSON Web Tokens with a 15-minute expiration time. Once issued, a JWT remains cryptographically valid until it expires.
-   - For all tenant-scoped routes, `TenantGuard` executes an active database lookup verifying that the user and organization have `status: 'ACTIVE'`, failing closed if either is suspended.
-   - For public or un-guarded routes, immediate sub-second token revocation is not enforced. If instantaneous global revocation is mandated for all routes in production, a Redis token denylist lookup must be introduced in `JwtAuthGuard` during Milestone 2.
+1. **Stateless Access Token Lifetime Window (15 Minutes):**
+   - Access tokens are stateless, signed JWTs valid for 15 minutes.
+   - For all tenant-scoped routes, `TenantGuard` executes real-time database verification of user and organization active status, failing closed if suspended.
+   - For public or un-guarded endpoints, immediate sub-second token revocation is not enforced. Global instantaneous token invalidation across all routes will be implemented in Milestone 2 via a Redis token denylist check in `JwtAuthGuard`.
 2. **Browser SOP Contract for Custom Header CSRF Defense:**
-   - The CSRF protection provided by `X-Requested-With` relies upon browser enforcement of the Same-Origin Policy and CORS preflight checks (`Access-Control-Allow-Headers`).
-   - Non-browser HTTP clients (such as curl, Postman, or server-to-server scripts) can attach arbitrary headers; however, non-browser clients do not store or automatically attach ambient browser cookies (`credentials: include`), meaning ambient-credential CSRF is exclusively a browser-based threat model.
-3. **Simulated Browser Contexts vs Headless Multi-Process Browser:**
-   - Cross-tab synchronization tests in `tests/unit/cross-tab-refresh.spec.ts` execute inside Vitest using simulated execution contexts and Web Locks API mocks/spies.
-   - They provide deterministic, fast verification of lock serialization, stale 401 handling, fail-closed mutual exclusion, and token theft defense. A live multi-process browser test suite (e.g. Playwright) is not installed in the repository and is deferred to post-foundation QA.
-4. **Database Local Container vs Production IAM:**
-   - `docker/postgres/init-roles.sql` and `docker-compose.yml` are strictly for local containerized development and CI. Production database roles must be provisioned via managed cloud infrastructure (AWS RDS, GCP Cloud SQL) using KMS-managed secrets.
-5. **Deferred Live Webhook Ingestion & Standalone Ingress Deployment:**
-   - As documented in `docs/decisions/MILESTONE_1_DECISIONS.md`, live external webhook ingestion (Meta WhatsApp Cloud API, Instagram Messaging, Stripe Webhooks), cryptographic HMAC signature verification against external provider secrets, and standalone production deployment of `apps/ingress` are strictly deferred to Milestone 2.
-   - The database role `orbit_ingress` is verified in PostgreSQL to have ZERO table access.
+   - The CSRF protection provided by `X-Requested-With` depends upon browser enforcement of the Same-Origin Policy and CORS preflight checks (`Access-Control-Allow-Headers`).
+   - Non-browser HTTP clients (such as curl, Postman, or server-to-server scripts) can set arbitrary headers; however, non-browser clients do not store or automatically attach ambient browser cookies (`credentials: include`), meaning ambient-credential CSRF is exclusively a browser-side threat model.
+3. **Tests Not Run:**
+   - Safari WebKit and Firefox Gecko multi-tab automated tests were not run; real browser tests were executed exclusively against Google Chrome (`v157.0.8103.79`) on Windows. Cross-browser verification on Safari and Firefox will be conducted during Milestone 5.
+   - Production cloud KMS secret rotation (AWS Secrets Manager / GCP Secret Manager) was not tested locally; local container testing verified `\getenv` literal interpolation and `docker-compose.yml` variable enforcement.
+4. **Behaviors Not Verified (Deferred to Milestone 2):**
+   - Real omnichannel webhook intake (Meta WhatsApp Cloud API, Instagram Messaging, Stripe Webhooks).
+   - Redis-backed BullMQ worker execution and outbox event sweepers.
+   - AI LLM inference and pgvector semantic embeddings.
+   - Live ingress HMAC cryptographic signature verification against external provider secrets.
 
 ---
 
 ## 7. Final Recommendation & Sign-Off
 
-All Milestone 1 findings, including the P1/P2 findings from the final autonomous correction loop (API double-listen bug, cross-tab refresh mutex fail-closed hardening, database role password sanitization, and documentation consolidation), have been resolved and verified with fresh direct evidence.
+All Milestone 1 security, concurrency, bootstrap, and role provisioning requirements have been implemented, tested, and verified against real infrastructure and real browsers:
 
-The entire test suite passes: **94 tests across 9 test files (0 failures)**. Monorepo builds, strict TypeScript typechecking, ESLint verification, and database migrations are 100% clean.
+- **100 tests passed across 10 test files (0 failures).**
+- **Real Headless Chrome browser multi-tab testing confirmed mutual exclusion under both Web Locks and the Tier-2 localStorage election fallback.**
+- **PostgreSQL catalog queries confirmed strict role least-privilege boundaries.**
+- **TypeScript strict typechecking, ESLint, monorepo builds, and database migrations are 100% clean.**
 
-**FINAL VERDICT: APPROVED & FULLY VERIFIED — MILESTONE 1 COMPLETE.**  
+**FINAL VERDICT: MILESTONE 1 CORRECTIONS VERIFIED**  
 Project Orbit is certified complete for Milestone 1 and ready to advance to **Milestone 2: Omnichannel Ingress, Transactional Outbox & Provider Messaging Adapters**.

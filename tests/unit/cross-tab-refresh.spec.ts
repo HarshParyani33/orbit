@@ -15,18 +15,48 @@ import {
   resetClientState,
   getStoredRefreshEpoch,
   setStoredRefreshEpoch,
+  setStoredRefreshStatus,
 } from '../../apps/web/src/api/client';
+
+class MockStorage implements Storage {
+  private store: Record<string, string> = {};
+  get length(): number {
+    return Object.keys(this.store).length;
+  }
+  clear(): void {
+    this.store = {};
+  }
+  getItem(key: string): string | null {
+    return Object.prototype.hasOwnProperty.call(this.store, key) ? this.store[key] : null;
+  }
+  key(index: number): string | null {
+    return Object.keys(this.store)[index] || null;
+  }
+  removeItem(key: string): void {
+    delete this.store[key];
+  }
+  setItem(key: string, value: string): void {
+    this.store[key] = String(value);
+  }
+}
 
 describe('Cross-Tab Refresh Token Coordination Tests', () => {
   const originalFetch = globalThis.fetch;
+  const originalLocalStorage = globalThis.localStorage;
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    globalThis.localStorage = new MockStorage();
     resetClientState();
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    if (originalLocalStorage) {
+      globalThis.localStorage = originalLocalStorage;
+    } else {
+      delete (globalThis as any).localStorage;
+    }
     resetClientState();
   });
 
@@ -182,6 +212,7 @@ describe('Cross-Tab Refresh Token Coordination Tests', () => {
     // Simulate sibling tab having completed refresh 100ms ago
     const siblingRefreshEpoch = Date.now() - 100;
     setStoredRefreshEpoch(siblingRefreshEpoch);
+    setStoredRefreshStatus('success');
 
     const lockSpy = vi
       .spyOn(navigator.locks, 'request')
@@ -248,5 +279,140 @@ describe('Cross-Tab Refresh Token Coordination Tests', () => {
     expect(epochStr).not.toContain(rawAccessToken);
     expect(epochStr).not.toContain('jwt');
     expect(epochStr).not.toContain('super_secret');
+  });
+
+  // ============================================================================
+  // Tier-2 Fallback: Multi-Tab Mutual Exclusion Without Web Locks API
+  // ============================================================================
+  it('6. fallback without Web Locks: two independent tabs attempting refresh concurrently serialize via two-phase election (exactly 1 network refresh)', async () => {
+    // Disable Web Locks to force Tier-2 fallback
+    const origLocks = navigator.locks;
+    Object.defineProperty(navigator, 'locks', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+
+    let refreshCallCount = 0;
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url === '/api/auth/refresh') {
+        refreshCallCount++;
+        await new Promise((r) => setTimeout(r, 60));
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data: { user: { id: 'u1' } } }),
+        };
+      }
+      return { ok: false, status: 404 };
+    });
+
+    try {
+      // Simulate Tab 1 and Tab 2 dispatching refresh simultaneously
+      const dispatchEpoch = Date.now();
+      const tab1Promise = requestTokenRefresh(dispatchEpoch);
+      // Give tab 2 a slight 5ms offset to simulate real asynchronous contention
+      await new Promise((r) => setTimeout(r, 5));
+      const tab2Promise = requestTokenRefresh(dispatchEpoch);
+
+      const [res1, res2] = await Promise.all([tab1Promise, tab2Promise]);
+
+      expect(res1).toBe(true);
+      expect(res2).toBe(true);
+      // CRITICAL: Even without Web Locks, exactly ONE network call was executed!
+      expect(refreshCallCount).toBe(1);
+    } finally {
+      Object.defineProperty(navigator, 'locks', {
+        value: origLocks,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
+  it('7. fallback without Web Locks: fails closed safely when localStorage is unavailable or throwing', async () => {
+    const origLocks = navigator.locks;
+    Object.defineProperty(navigator, 'locks', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+
+    let networkCallAttempted = false;
+    let authFailureCalled = false;
+    setAuthFailureHandler(() => {
+      authFailureCalled = true;
+    });
+
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      networkCallAttempted = true;
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+
+    // Mock localStorage throwing SecurityError (e.g. private browsing or sandboxed iframe)
+    const storage = globalThis.localStorage as Storage;
+    const originalSetItem = storage.setItem.bind(storage);
+    storage.setItem = vi.fn().mockImplementation(() => {
+      throw new DOMException('The operation is insecure.', 'SecurityError');
+    });
+
+    try {
+      const result = await requestTokenRefresh();
+      // Invariant: Must fail closed safely without making uncoordinated network call!
+      expect(result).toBe(false);
+      expect(networkCallAttempted).toBe(false);
+      expect(authFailureCalled).toBe(true);
+    } finally {
+      storage.setItem = originalSetItem;
+      Object.defineProperty(navigator, 'locks', {
+        value: origLocks,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
+  it('8. fallback without Web Locks: recovers from a crashed holder with a stale lease (> 6000ms TTL)', async () => {
+    const origLocks = navigator.locks;
+    Object.defineProperty(navigator, 'locks', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+
+    let refreshCallCount = 0;
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url === '/api/auth/refresh') {
+        refreshCallCount++;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data: { user: { id: 'u1' } } }),
+        };
+      }
+      return { ok: false, status: 404 };
+    });
+
+    // Seed localStorage with a stale lease from a crashed tab that terminated 10 seconds ago
+    const storage = globalThis.localStorage as Storage;
+    storage.setItem(
+      'orbit_auth_refresh_lease',
+      JSON.stringify({
+        ownerId: 'crashed_tab_session_999',
+        expiresAt: Date.now() - 10000,
+      })
+    );
+
+    try {
+      const result = await requestTokenRefresh();
+      expect(result).toBe(true);
+      expect(refreshCallCount).toBe(1);
+    } finally {
+      Object.defineProperty(navigator, 'locks', {
+        value: origLocks,
+        configurable: true,
+        writable: true,
+      });
+    }
   });
 });

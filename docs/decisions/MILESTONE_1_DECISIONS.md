@@ -189,6 +189,25 @@ Diagnostic execution of `python .agents/skills/gravitas/scripts/doctor.py` confi
   - **18.3 Role Provisioning Sanitization:** In `docker/postgres/init-roles.sql`, create roles without hardcoded initial passwords (`CREATE ROLE ... WITH LOGIN NOSUPERUSER ...`), and dynamically assign passwords via `ALTER ROLE ... WITH PASSWORD :'var'` using psql `\getenv` and SQL literal interpolation.
   - **18.4 Document Consolidation & Test Taxonomy:** Reconcile all Milestone 1 review artifacts into one authoritative document with a single ID, clean headings, a unified findings table, and precise test classifications distinguishing Real Database Integration Tests, Real HTTP TCP Integration Tests, Simulated Execution Context Tests, and Unit Tests.
 
+### Decision 19: Cross-Tab Refresh Mutual Exclusion Fallback & Real Browser Verification
+- **Context:** When the W3C Web Locks API (`navigator.locks`) is unavailable (e.g. non-secure contexts, restricted iframes, older browser engines), `apps/web/src/api/client.ts` previously fell back directly to `executeSingleFlightRefresh()`. In multi-tab scenarios without Web Locks, concurrent tabs receiving 401s would each send `/api/auth/refresh`, causing server-side replay detection to revoke the session family. Furthermore, prior verification of cross-tab coordination used Vitest simulated execution contexts rather than live multi-page browser automation.
+- **Decision:**
+  - **19.1 Tier-1 Preferred Coordination (Web Locks API):** Retain `navigator.locks.request('orbit_auth_refresh_lock', ...)` as the primary, browser-native cross-tab mutual exclusion mechanism with 10-second timeout guard.
+  - **19.2 Tier-2 Fallback Coordination (Two-Phase Staged Election in localStorage):** When `navigator.locks` is unavailable, implement a robust multi-phase candidate ticket election lease:
+    1. Check for active lease (`orbit_auth_refresh_lease` with `expiresAt > Date.now()`).
+    2. Phase 1: Register unique candidate ticket in `localStorage` (`orbit_auth_candidate_${clientId}`).
+    3. Phase 2: Wait arbitration jitter window (40-70ms) to allow concurrent contenders across tabs to write their tickets.
+    4. Phase 3: Evaluate all active candidate tickets deterministically (lowest timestamp/priority wins). If this tab lost, back off, clean ticket, and wait for the winner's result.
+    5. Phase 4: Winner commits lease (`ownerId`, `expiresAt = Date.now() + 6000`), checks if sibling refreshed during arbitration, executes `executeSingleFlightRefresh()`, updates `storedRefreshEpoch`, and releases lease.
+    6. Handlers for stale lease recovery (crashed winner tab after 6000ms TTL) and loop timeout guards.
+  - **19.3 Fail-Closed Safety Invariant:** If `localStorage` is unavailable, throwing (e.g. storage disabled, private browsing security error), or fails to achieve coordination before timeout, the client MUST FAIL CLOSED (`setStoredRefreshStatus('failed')`, notify `authFailureHandler()`, return `false`). It must NEVER execute an uncoordinated network refresh that risks token reuse revocation.
+  - **19.4 Zero Token/Credential Disclosure:** Storage and messages strictly contain integer timestamps, status strings, or random lease UUIDs. No access tokens, refresh tokens, or cookies are ever written to `localStorage` or `BroadcastChannel`.
+  - **19.5 Real Multi-Page Browser Testing:** Author real browser integration tests using Playwright against live system Chrome (`executablePath`) with two independent browser pages in the same browser context sharing cookies, validating:
+    1. Concurrent 401 requests across two pages trigger exactly ONE `/api/auth/refresh` request under Web Locks.
+    2. Concurrent 401 requests with Web Locks disabled trigger exactly ONE `/api/auth/refresh` request via the Tier-2 fallback election.
+    3. Both pages recover their protected requests successfully without session revocation.
+    4. Replaying a consumed refresh token triggers server-side theft detection and session family revocation.
+
 ---
 
 ## 3. Staged Implementation Plan

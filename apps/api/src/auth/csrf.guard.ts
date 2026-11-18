@@ -98,9 +98,14 @@ export class CsrfGuard implements CanActivate {
       }
     }
 
-    // If Origin or Referer is present, it MUST match the allowed origins list
+    // If Origin or Referer is present, it MUST match the allowed origins list or be same-origin
     if (requestOrigin) {
-      if (!this.allowedOrigins.has(requestOrigin)) {
+      const rawHost = request.headers?.['host'];
+      const host = typeof rawHost === 'string' ? rawHost : (typeof request.get === 'function' ? request.get('host') : undefined);
+      const protocol = request.protocol || 'http';
+      const sameOrigin = host ? `${protocol}://${host}` : null;
+
+      if (!this.allowedOrigins.has(requestOrigin) && requestOrigin !== sameOrigin) {
         throw new ForbiddenException(
           `Cross-Site Request Forgery (CSRF) blocked: Origin '${requestOrigin}' is not authorized`
         );

@@ -8,8 +8,46 @@ let lastSuccessfulRefreshTime = 0;
 // Shared Storage & Web Lock Constants for Cross-Tab Coordination
 const STORAGE_KEY_LAST_REFRESH = 'orbit_auth_last_refresh_epoch';
 const STORAGE_KEY_REFRESH_STATUS = 'orbit_auth_last_refresh_status';
+const STORAGE_KEY_LEASE = 'orbit_auth_refresh_lease';
+const STORAGE_PREFIX_CANDIDATE = 'orbit_auth_candidate_';
 const LOCK_NAME = 'orbit_auth_refresh_lock';
 const LOCK_TIMEOUT_MS = 10000;
+const LEASE_TTL_MS = 6000;
+
+interface LeaseData {
+  ownerId: string;
+  expiresAt: number;
+}
+
+interface CandidateTicket {
+  clientId: string;
+  timestamp: number;
+  priority: number;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export function getLocalStorage(): Storage | null {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) return window.localStorage;
+    if (typeof globalThis !== 'undefined' && (globalThis as any).localStorage) return (globalThis as any).localStorage;
+    if (typeof localStorage !== 'undefined') return localStorage;
+  } catch {}
+  return null;
+}
+
+export function isLocalStorageAvailable(): boolean {
+  try {
+    const storage = getLocalStorage();
+    if (!storage) return false;
+    const testKey = '__orbit_storage_test__';
+    storage.setItem(testKey, '1');
+    storage.removeItem(testKey);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // Memory storage fallback when localStorage is unavailable (e.g. sandboxed or Node.js)
 let memoryStorage: Record<string, string> = {};
@@ -49,8 +87,9 @@ export function getLastSuccessfulRefreshTime(): number {
 
 export function getStoredRefreshEpoch(): number {
   try {
-    if (typeof localStorage !== 'undefined') {
-      const val = localStorage.getItem(STORAGE_KEY_LAST_REFRESH);
+    const storage = getLocalStorage();
+    if (storage) {
+      const val = storage.getItem(STORAGE_KEY_LAST_REFRESH);
       if (val) {
         return parseInt(val, 10) || 0;
       }
@@ -62,8 +101,9 @@ export function getStoredRefreshEpoch(): number {
 
 export function setStoredRefreshEpoch(epoch: number): void {
   try {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(STORAGE_KEY_LAST_REFRESH, String(epoch));
+    const storage = getLocalStorage();
+    if (storage) {
+      storage.setItem(STORAGE_KEY_LAST_REFRESH, String(epoch));
     }
   } catch {}
   memoryStorage[STORAGE_KEY_LAST_REFRESH] = String(epoch);
@@ -71,8 +111,9 @@ export function setStoredRefreshEpoch(epoch: number): void {
 
 export function getStoredRefreshStatus(): string | null {
   try {
-    if (typeof localStorage !== 'undefined') {
-      return localStorage.getItem(STORAGE_KEY_REFRESH_STATUS);
+    const storage = getLocalStorage();
+    if (storage) {
+      return storage.getItem(STORAGE_KEY_REFRESH_STATUS);
     }
   } catch {}
   return memoryStorage[STORAGE_KEY_REFRESH_STATUS] || null;
@@ -80,8 +121,9 @@ export function getStoredRefreshStatus(): string | null {
 
 export function setStoredRefreshStatus(status: 'success' | 'failed'): void {
   try {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(STORAGE_KEY_REFRESH_STATUS, status);
+    const storage = getLocalStorage();
+    if (storage) {
+      storage.setItem(STORAGE_KEY_REFRESH_STATUS, status);
     }
   } catch {}
   memoryStorage[STORAGE_KEY_REFRESH_STATUS] = status;
@@ -94,9 +136,17 @@ export function resetClientState(): void {
   lastSuccessfulRefreshTime = 0;
   memoryStorage = {};
   try {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem(STORAGE_KEY_LAST_REFRESH);
-      localStorage.removeItem(STORAGE_KEY_REFRESH_STATUS);
+    const storage = getLocalStorage();
+    if (storage) {
+      storage.removeItem(STORAGE_KEY_LAST_REFRESH);
+      storage.removeItem(STORAGE_KEY_REFRESH_STATUS);
+      storage.removeItem(STORAGE_KEY_LEASE);
+      for (let i = storage.length - 1; i >= 0; i--) {
+        const key = storage.key(i);
+        if (key && key.startsWith(STORAGE_PREFIX_CANDIDATE)) {
+          storage.removeItem(key);
+        }
+      }
     }
   } catch {}
 }
@@ -178,12 +228,179 @@ async function executeSingleFlightRefresh(): Promise<boolean> {
 }
 
 /**
+ * Tier-2 Fallback: Multi-tab mutual exclusion via Staged Two-Phase Ticket Election in localStorage.
+ * Used when W3C Web Locks API (navigator.locks) is unavailable.
+ *
+ * Guarantees:
+ * 1. Mutual Exclusion: At most one tab acquires the lease at any given time.
+ * 2. Collision Resolution: Staged arbitration window (40-65ms) prevents simultaneous lease acquisition without CAS.
+ * 3. Stale Lock Recovery: Crashed or terminated lease holders expire after LEASE_TTL_MS (6000ms).
+ * 4. Fail-Closed Safety: If localStorage is unavailable, throwing, or times out, fails closed safely.
+ * 5. Zero Token Disclosure: Only non-sensitive timestamps, UUIDs, and status flags are stored in localStorage.
+ */
+async function executeLocalStorageFallbackRefresh(dispatchEpoch?: number): Promise<boolean> {
+  const storage = getLocalStorage();
+  if (!storage || !isLocalStorageAvailable()) {
+    // If neither Web Locks nor localStorage is functional, cross-tab mutual exclusion
+    // cannot be established. Fail closed safely rather than risking uncoordinated token rotation.
+    setStoredRefreshStatus('failed');
+    if (broadcastChannel) {
+      try {
+        broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
+      } catch {}
+    }
+    if (authFailureHandler) {
+      authFailureHandler();
+    }
+    return false;
+  }
+
+  const clientId = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const ticketKey = `${STORAGE_PREFIX_CANDIDATE}${clientId}`;
+  const startTime = Date.now();
+
+  try {
+    while (Date.now() - startTime < LOCK_TIMEOUT_MS) {
+      // 1. Check if another tab completed refresh while we were waiting
+      const storedRefresh = getStoredRefreshEpoch();
+      const storedStatus = getStoredRefreshStatus();
+      if (dispatchEpoch && storedRefresh > dispatchEpoch && storedStatus === 'success') {
+        lastSuccessfulRefreshTime = performance.now();
+        return true;
+      }
+
+      // 2. Check active lease
+      let currentLease: LeaseData | null = null;
+      try {
+        const raw = storage.getItem(STORAGE_KEY_LEASE);
+        if (raw) currentLease = JSON.parse(raw);
+      } catch {}
+
+      if (currentLease && currentLease.expiresAt > Date.now()) {
+        // Lease actively held by another tab. Sleep and re-check.
+        await sleep(35 + Math.random() * 25);
+        continue;
+      }
+
+      // 3. Phase 1: Post Candidate Ticket
+      const ticket: CandidateTicket = {
+        clientId,
+        timestamp: Date.now(),
+        priority: Math.random(),
+      };
+      try {
+        storage.setItem(ticketKey, JSON.stringify(ticket));
+      } catch {
+        // Storage write error, fail closed
+        setStoredRefreshStatus('failed');
+        if (authFailureHandler) authFailureHandler();
+        return false;
+      }
+
+      // 4. Phase 2: Arbitration jitter window (40-65ms)
+      await sleep(40 + Math.random() * 25);
+
+      // 5. Phase 3: Evaluate contenders
+      const candidates: CandidateTicket[] = [];
+      try {
+        for (let i = 0; i < storage.length; i++) {
+          const key = storage.key(i);
+          if (key && key.startsWith(STORAGE_PREFIX_CANDIDATE)) {
+            const rawVal = storage.getItem(key);
+            if (rawVal) {
+              const c: CandidateTicket = JSON.parse(rawVal);
+              if (Date.now() - c.timestamp < 1000) {
+                candidates.push(c);
+              }
+            }
+          }
+        }
+      } catch {}
+
+      candidates.sort((a, b) => {
+        if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+        return a.priority - b.priority;
+      });
+
+      const winner = candidates[0];
+      if (!winner || winner.clientId !== clientId) {
+        // Lost election. Clean ticket, wait, and retry loop.
+        try { storage.removeItem(ticketKey); } catch {}
+        await sleep(35 + Math.random() * 25);
+        continue;
+      }
+
+      // 6. Phase 4: Winner commits lease
+      const lease: LeaseData = {
+        ownerId: clientId,
+        expiresAt: Date.now() + LEASE_TTL_MS,
+      };
+      try {
+        storage.setItem(STORAGE_KEY_LEASE, JSON.stringify(lease));
+        storage.removeItem(ticketKey);
+      } catch {
+        setStoredRefreshStatus('failed');
+        if (authFailureHandler) authFailureHandler();
+        return false;
+      }
+
+      // 7. Check if another tab refreshed while we arbitrated
+      const interimRefresh = getStoredRefreshEpoch();
+      const interimStatus = getStoredRefreshStatus();
+      if (dispatchEpoch && interimRefresh > dispatchEpoch && interimStatus === 'success') {
+        try { storage.removeItem(STORAGE_KEY_LEASE); } catch {}
+        lastSuccessfulRefreshTime = performance.now();
+        return true;
+      }
+
+      // 8. Winner executes refresh
+      try {
+        return await executeSingleFlightRefresh();
+      } finally {
+        try {
+          const raw = storage.getItem(STORAGE_KEY_LEASE);
+          if (raw) {
+            const l: LeaseData = JSON.parse(raw);
+            if (l.ownerId === clientId) {
+              storage.removeItem(STORAGE_KEY_LEASE);
+            }
+          }
+        } catch {}
+      }
+    }
+
+    // Contention timeout: check one last time if a sibling completed refresh
+    const finalRefresh = getStoredRefreshEpoch();
+    const finalStatus = getStoredRefreshStatus();
+    if (dispatchEpoch && finalRefresh > dispatchEpoch && finalStatus === 'success') {
+      lastSuccessfulRefreshTime = performance.now();
+      return true;
+    }
+
+    // Fail closed safely
+    setStoredRefreshStatus('failed');
+    if (broadcastChannel) {
+      try {
+        broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
+      } catch {}
+    }
+    if (authFailureHandler) {
+      authFailureHandler();
+    }
+    return false;
+  } finally {
+    try { storage.removeItem(ticketKey); } catch {}
+  }
+}
+
+/**
  * Cross-Tab Coordinated Token Refresh Mechanism.
  * Ensures that multiple simultaneous API requests across one or MORE browser tabs
  * do not trigger concurrent refresh operations, avoiding server-side token reuse / theft detection.
  *
- * Uses the Web Locks API (navigator.locks) when available to serialize execution across tabs.
- * If another tab completes refresh while this tab was queued, this tab reuses the freshly rotated cookie.
+ * Tier 1: Uses the W3C Web Locks API (navigator.locks) when available to serialize execution across tabs.
+ * Tier 2: Falls back to Staged Two-Phase Ticket Election in localStorage when Web Locks are absent.
+ * Fail-Closed: If safe coordination cannot be established, fails closed safely without uncoordinated network requests.
  */
 export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boolean> {
   // If a refresh operation is already in-flight in THIS execution context, return existing promise
@@ -193,7 +410,7 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
 
   refreshPromise = (async () => {
     try {
-      // 1. Cross-tab coordination via Web Locks API when available
+      // 1. Tier-1: Cross-tab coordination via Web Locks API when available
       if (
         typeof navigator !== 'undefined' &&
         navigator.locks &&
@@ -211,13 +428,8 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
 
               // Check if another tab completed refresh while we were waiting for the lock
               const storedRefresh = getStoredRefreshEpoch();
-              if (dispatchEpoch && storedRefresh > dispatchEpoch) {
-                lastSuccessfulRefreshTime = performance.now();
-                return true;
-              }
-
-              // If a refresh succeeded very recently (< 1500ms), reuse the ambient cookie
-              if (storedRefresh > 0 && Date.now() - storedRefresh < 1500) {
+              const storedStatus = getStoredRefreshStatus();
+              if (dispatchEpoch && storedRefresh > dispatchEpoch && storedStatus === 'success') {
                 lastSuccessfulRefreshTime = performance.now();
                 return true;
               }
@@ -232,12 +444,8 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
           // and risks concurrent token rotation and session family theft revocation.
           // First, check whether another tab successfully completed refresh in the interim:
           const storedRefresh = getStoredRefreshEpoch();
-          if (dispatchEpoch && storedRefresh > dispatchEpoch) {
-            lastSuccessfulRefreshTime = performance.now();
-            return true;
-          }
-
-          if (storedRefresh > 0 && Date.now() - storedRefresh < 1500) {
+          const storedStatus = getStoredRefreshStatus();
+          if (dispatchEpoch && storedRefresh > dispatchEpoch && storedStatus === 'success') {
             lastSuccessfulRefreshTime = performance.now();
             return true;
           }
@@ -256,8 +464,9 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
         }
       }
 
-      // 2. Fallback for environments without Web Locks API
-      return await executeSingleFlightRefresh();
+      // 2. Tier-2: Fallback for environments without Web Locks API
+      // Uses Staged Two-Phase Ticket Election Lease in localStorage
+      return await executeLocalStorageFallbackRefresh(dispatchEpoch);
     } finally {
       refreshPromise = null;
     }
@@ -314,7 +523,8 @@ export async function apiRequest<T>(
 
     // 2. Cross-tab stale 401 check: did another tab already refresh after this request was sent?
     const storedRefresh = getStoredRefreshEpoch();
-    if (storedRefresh > requestDispatchEpoch) {
+    const storedStatus = getStoredRefreshStatus();
+    if (storedRefresh > requestDispatchEpoch && storedStatus === 'success') {
       lastSuccessfulRefreshTime = performance.now();
       return apiRequest<T>(endpoint, {
         ...options,
