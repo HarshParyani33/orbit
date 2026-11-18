@@ -38,6 +38,8 @@ import { AttachmentsService } from './attachments/attachments.service';
 import { AttachmentsController } from './attachments/attachments.controller';
 import { BillingService } from './billing/billing.service';
 import { BillingController } from './billing/billing.controller';
+import { KnowledgeService } from './knowledge/knowledge.service';
+import { KnowledgeController } from './knowledge/knowledge.controller';
 import { StripeIngestionService } from './webhooks/stripe-ingestion.service';
 import { StripeSignatureGuard } from './webhooks/guards/stripe-signature.guard';
 
@@ -67,6 +69,7 @@ import { StripeSignatureGuard } from './webhooks/guards/stripe-signature.guard';
     WebhooksController,
     AttachmentsController,
     BillingController,
+    KnowledgeController,
   ],
   providers: [
     PrismaService,
@@ -98,6 +101,7 @@ import { StripeSignatureGuard } from './webhooks/guards/stripe-signature.guard';
     AttachmentsService,
     BillingService,
     StripeIngestionService,
+    KnowledgeService,
   ],
   exports: [
     PrismaService,
@@ -119,6 +123,7 @@ import { StripeSignatureGuard } from './webhooks/guards/stripe-signature.guard';
     AttachmentsService,
     BillingService,
     StripeIngestionService,
+    KnowledgeService,
   ],
 })
 export class AppModule { }

@@ -38,3 +38,10 @@ export * from './instagram/mock-instagram.adapter';
 export * from './storage/types';
 export * from './storage/disk-storage.provider';
 export * from './storage/mock-storage.provider';
+
+// Embedding Provider Contracts & Chunking Engine
+export * from './embeddings/types';
+export * from './embeddings/chunking-engine';
+export * from './embeddings/mock-embedding.provider';
+export * from './embeddings/openai-embedding.provider';
+

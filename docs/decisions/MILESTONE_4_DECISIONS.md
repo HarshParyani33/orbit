@@ -7,7 +7,7 @@ This document records the architectural and engineering decisions for **Mileston
 
 ## Decision 35: Multi-Tenant Knowledge Base Relational & Vector Schema with pgvector (Milestone 4 Slice 4.1)
 
-- **Status:** APPROVED & VERIFIED (Commit pending, local 10/10 tests green)
+- **Status:** APPROVED & VERIFIED (Commit `6df68d1`, CI Run `44337436477`)
 - **Date:** 2026-11-18
 - **Context:**
   Project Orbit requires a multi-tenant knowledge base allowing businesses to define FAQs, product specs, policies, and reference documentation. The AI assistant must retrieve relevant snippets without ever leaking data across tenant boundaries, and ground answers strictly in retrieved evidence.
@@ -62,4 +62,66 @@ This document records the architectural and engineering decisions for **Mileston
     - Missing tenant context fails closed.
   - Monorepo full test suite: 263/263 passed across 23 test suites.
   - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
+  - **GitHub Actions CI Verification:** [CI Run #44337436477](https://github.com/HarshParyani33/orbit/actions/runs/44337436477) completed with conclusion `success` across all 17 pipeline steps.
+
+---
+
+## Decision 36: Embedding Service, Chunking Engine & Multi-Tenant Ingestion Pipeline (Milestone 4 Slice 4.2)
+
+- **Status:** APPROVED & VERIFIED (Commit pending, local 15/15 tests green)
+- **Date:** 2026-11-18
+- **Context:**
+  Having established the relational and pgvector schema in Slice 4.1, Project Orbit requires an automated knowledge ingestion pipeline that:
+  1. Accepts rich multi-tenant document content (FAQs, policies, product guides).
+  2. Intelligently segments text into coherent semantically bounded chunks with configurable token boundaries and overlap.
+  3. Computes 1536-dimensional vector embeddings via `IEmbeddingProvider` abstraction (supporting `MockEmbeddingProvider` for offline deterministic testing and `OpenAiEmbeddingProvider` for production `text-embedding-3-small`).
+  4. Stores the document and its embedded chunks atomically inside `TenantTransactionRunner.runWithTenant(organizationId)`.
+  5. Provides a validated REST API (`KnowledgeController` and `KnowledgeService`) for document creation, paginated listing, retrieval with chunk counts, and deletion.
+
+- **Decision:**
+  1. **Chunking Engine (`ChunkingEngine` in `@orbit/integrations`):**
+     - Text chunking with natural boundary detection (paragraphs `\n\n`, then sentences `. `, then words).
+     - Default chunk size: ~500 tokens (~2000 chars), overlap: ~50 tokens (~200 chars).
+     - Emits `ChunkResult` containing `chunkIndex`, `chunkText`, and approximate `tokenCount`.
+  2. **Embedding Provider Abstraction (`IEmbeddingProvider` in `@orbit/integrations`):**
+     - Methods: `generateEmbedding(text: string): Promise<number[]>` and `generateEmbeddings(texts: string[]): Promise<number[][]>`.
+     - `MockEmbeddingProvider`: Generates deterministic, L2-normalized 1536-dimensional unit vectors (`sum(v_i^2) = 1.0`). Ensures consistent cosine similarity tests without external API dependencies.
+     - `OpenAiEmbeddingProvider`: Interfaces with OpenAI's `text-embedding-3-small` (1536 dimensions) for live production workloads.
+  3. **Multi-Tenant Ingestion Service (`KnowledgeService` in `@orbit/api`):**
+     - `createDocument(orgId, dto)`:
+       - Runs within interactive transaction setting `app.current_org_id`.
+       - Inserts `knowledge_documents` row.
+       - Runs `ChunkingEngine.chunkText(dto.content)`.
+       - Obtains embeddings from `IEmbeddingProvider`.
+       - Persists chunks into `knowledge_chunks` with parameterized `${vectorStr}::vector` binding.
+     - `listDocuments(orgId, query)`: Paginated document list with associated chunk counts.
+     - `getDocument(orgId, docId)`: Retrieves document details and chunk breakdown.
+     - `deleteDocument(orgId, docId)`: Atomically deletes document and cascades chunk removal.
+  4. **Validation & API Contracts (`@orbit/validation`):**
+     - `CreateKnowledgeDocumentSchema`: enforces title (1-255 chars), sourceType (`FAQ`, `MANUAL_ENTRY`, `DOCUMENT_UPLOAD`, `POLICY`), content (1-100,000 chars), and optional JSON metadata.
+     - `ListKnowledgeDocumentsQuerySchema`: validates page and limit parameters.
+  5. **API Endpoints (`KnowledgeController`):**
+     - Protected by `JwtAuthGuard` and `TenantGuard`.
+     - `POST /api/knowledge/documents`
+     - `GET /api/knowledge/documents`
+     - `GET /api/knowledge/documents/:id`
+     - `DELETE /api/knowledge/documents/:id`
+
+- **Evidence & Verification:**
+  - Implemented `ChunkingEngine` and `IEmbeddingProvider` (`MockEmbeddingProvider`, `OpenAiEmbeddingProvider`) in `@orbit/integrations`.
+  - Implemented `KnowledgeService` and `KnowledgeController` in `@orbit/api`.
+  - Added validation schemas and DTOs in `@orbit/validation`.
+  - Authored and executed automated integration test suite `tests/integration/knowledge-ingestion.spec.ts` (15 tests) verifying:
+    - Text chunking with natural boundary detection and token estimation.
+    - Deterministic 1536-dimensional L2 unit vector generation.
+    - End-to-end document creation with automatic chunking and vector persistence.
+    - Paginated document listing with accurate chunk counts.
+    - Single document retrieval with complete chunk breakdown.
+    - Multi-tenant isolation: Tenant B cannot list, retrieve, or delete Tenant A's documents or chunks.
+    - Document deletion cascading to all stored vector chunks.
+    - HTTP API endpoints with `JwtAuthGuard` and `TenantGuard` authentication and authorization.
+  - Monorepo full test suite: 278/278 passed across all 24 test suites.
+  - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
+
+
 

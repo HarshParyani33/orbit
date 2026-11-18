@@ -203,3 +203,35 @@ export const ALLOWED_ATTACHMENT_MIME_TYPES = [
 
 export const MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
 
+// Knowledge Base Schemas & Constants
+export const KNOWLEDGE_SOURCE_TYPES = [
+  'FAQ',
+  'MANUAL_ENTRY',
+  'DOCUMENT_UPLOAD',
+  'POLICY',
+] as const;
+
+export const KNOWLEDGE_DOCUMENT_STATUSES = [
+  'DRAFT',
+  'PROCESSING',
+  'ACTIVE',
+  'ARCHIVED',
+] as const;
+
+export const createKnowledgeDocumentSchema = z.object({
+  title: z.string().min(1, 'Title is required').max(255).trim(),
+  sourceType: z.enum(KNOWLEDGE_SOURCE_TYPES).default('MANUAL_ENTRY'),
+  content: z.string().min(1, 'Content is required').max(100000, 'Content exceeds 100,000 characters'),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+export const listKnowledgeDocumentsQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  search: z.string().optional(),
+});
+
+export type CreateKnowledgeDocumentInput = z.infer<typeof createKnowledgeDocumentSchema>;
+export type ListKnowledgeDocumentsQuery = z.infer<typeof listKnowledgeDocumentsQuerySchema>;
+
+
