@@ -400,7 +400,7 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
 
     for (let trial = 1; trial <= totalTrials; trial++) {
       // Pause between trials to ensure all asynchronous promise resolutions and CDP events complete
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 200));
 
       // Clear access token before each trial to force 401
       await context.clearCookies({ name: 'access_token' });
@@ -624,6 +624,102 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
 
     expect(page2Result.success).toBe(false);
     expect(page2Result.error).toMatch(/Session expired or revoked/i);
+
+    await context.close();
+  }, 30000);
+
+  it('Scenario 8: Real Browser Login After Logout — Re-authenticating after logout clears logout barrier and allows legitimate subsequent token refresh', async () => {
+    const context: BrowserContext = await browser.newContext();
+    const testEmail = `browser_relogin_${Date.now()}@example.com`;
+    const password = 'Password123!';
+
+    const page1 = await context.newPage();
+    await page1.goto(`${baseUrl}/test.html`);
+
+    // 1. Register / Login as User A
+    const regResult = await page1.evaluate(
+      async ({ email, pass }: any) => {
+        return await OrbitClient.apiRequest('/api/auth/register', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: 'Relogin User',
+            email,
+            password: pass,
+            organizationName: 'Relogin Org',
+          }),
+        });
+      },
+      { email: testEmail, pass: password }
+    );
+
+    const orgId = regResult.organizations[0].id;
+    await page1.evaluate((id: string) => OrbitClient.setActiveOrgId(id), orgId);
+
+    // 2. Verify authenticated protected request succeeds
+    const orgs1 = await page1.evaluate(async () => {
+      return await OrbitClient.apiRequest('/api/organizations');
+    });
+    expect(Array.isArray(orgs1)).toBe(true);
+    expect(orgs1.length).toBeGreaterThanOrEqual(1);
+
+    // 3. Logout
+    await page1.evaluate(async () => {
+      await OrbitClient.apiRequest('/api/auth/logout', { method: 'POST' });
+    });
+
+    // 4. Verify logout state is propagated and protected request fails closed
+    const postLogoutResult = await page1.evaluate(async () => {
+      try {
+        await OrbitClient.apiRequest('/api/organizations');
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message };
+      }
+    });
+    expect(postLogoutResult.success).toBe(false);
+    expect(postLogoutResult.error).toMatch(/Session expired or revoked/i);
+
+    // 5. Login again as User A
+    let refreshCalls = 0;
+    page1.on('request', (req) => {
+      if (req.url().includes('/api/auth/refresh') && req.method() === 'POST') {
+        refreshCalls++;
+      }
+    });
+
+    const loginResult = await page1.evaluate(
+      async ({ email, pass }: any) => {
+        return await OrbitClient.apiRequest('/api/auth/login', {
+          method: 'POST',
+          body: JSON.stringify({ email, password: pass }),
+        });
+      },
+      { email: testEmail, pass: password }
+    );
+    expect(loginResult.user.id).toBe(regResult.user.id);
+    await page1.evaluate((id: string) => OrbitClient.setActiveOrgId(id), orgId);
+
+    // 6. Expire the access token while preserving the valid refresh cookie
+    await context.clearCookies({ name: 'access_token' });
+    const refreshCountBefore = refreshCalls;
+
+    // 7. Make a protected request
+    const orgsAfterRelogin = await page1.evaluate(async () => {
+      return await OrbitClient.apiRequest('/api/organizations');
+    });
+
+    // 8. Verify exactly one legitimate refresh request occurred
+    expect(refreshCalls - refreshCountBefore).toBe(1);
+
+    // 9. Verify the protected request succeeded
+    expect(Array.isArray(orgsAfterRelogin)).toBe(true);
+    expect(orgsAfterRelogin[0].name).toBe('Relogin Org');
+
+    // 10. Verify the session family remains healthy (1 active session)
+    const activeSessions = await prisma.userSession.findMany({
+      where: { userId: regResult.user.id, isRevoked: false },
+    });
+    expect(activeSessions.length).toBe(1);
 
     await context.close();
   }, 30000);

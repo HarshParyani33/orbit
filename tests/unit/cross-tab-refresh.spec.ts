@@ -22,6 +22,12 @@ import {
   getStoredSessionCorrelation,
   setStoredSessionCorrelation,
   isSiblingRefreshValid,
+  getCurrentSessionEpoch,
+  setCurrentSessionEpoch,
+  isTabSessionLoggedOut,
+  getStoredLogoutRecord,
+  isLogoutAuthoritativeForSession,
+  getBroadcastChannel,
 } from '../../apps/web/src/api/client';
 
 class MockStorage implements Storage {
@@ -396,6 +402,109 @@ describe('Cross-Tab Refresh Token Coordination Tests', () => {
     const refreshResult = await requestTokenRefresh();
     expect(refreshResult).toBe(false);
     expect(refreshAttempted).toBe(false);
+  });
+
+  it('8b. login after logout: establishing a fresh authenticated session supersedes previous logout record and allows legitimate refresh', async () => {
+    // 1. Initial login
+    const loginEpoch1 = 1000;
+    setActiveUserId('user_A_id', loginEpoch1);
+    setStoredRefreshStatus('success');
+
+    // 2. User logs out
+    markLoggedOut();
+    expect(getActiveUserId()).toBeNull();
+    expect(getStoredRefreshStatus()).toBe('logged_out');
+    expect(isTabSessionLoggedOut()).toBe(true);
+
+    const logoutRecord = getStoredLogoutRecord();
+    expect(logoutRecord).not.toBeNull();
+    const logoutEpoch = logoutRecord!.logoutEpoch;
+    expect(logoutEpoch).toBeGreaterThanOrEqual(loginEpoch1);
+
+    // In logged-out state, refresh is rejected
+    expect(await requestTokenRefresh()).toBe(false);
+
+    // 3. User logs in again with a fresh session established after the logout
+    const loginEpoch2 = logoutEpoch + 500;
+    setActiveUserId('user_A_id', loginEpoch2);
+
+    expect(getActiveUserId()).toBe('user_A_id');
+    expect(getCurrentSessionEpoch()).toBe(loginEpoch2);
+    expect(isTabSessionLoggedOut()).toBe(false);
+    expect(getStoredRefreshStatus()).toBe('success');
+
+    const freshCorr = getStoredSessionCorrelation();
+    expect(freshCorr).not.toBeNull();
+    expect(freshCorr!.userId).toBe('user_A_id');
+    expect(freshCorr!.sessionEpoch).toBe(loginEpoch2);
+
+    // 4. Access token expires: protected request triggers token refresh
+    let refreshAttempted = false;
+    globalThis.fetch = vi.fn().mockImplementation(async (url: any) => {
+      if (typeof url === 'string' && url.includes('/api/auth/refresh')) {
+        refreshAttempted = true;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: { user: { id: 'user_A_id' } },
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+
+    // Mock Web Locks API to succeed
+    (navigator as any).locks = {
+      request: vi.fn().mockImplementation(async (_name, _options, callback) => {
+        return callback();
+      }),
+    };
+
+    const refreshResult = await requestTokenRefresh();
+    expect(refreshResult).toBe(true);
+    expect(refreshAttempted).toBe(true);
+    expect(getStoredRefreshStatus()).toBe('success');
+  });
+
+  it('8c. stale broadcast protection: delayed messages from older session epochs are discarded without corrupting active session', async () => {
+    // Establish active session at epoch 5000
+    const activeEpoch = 5000;
+    setActiveUserId('user_A_id', activeEpoch);
+    setStoredSessionCorrelation({
+      userId: 'user_A_id',
+      sessionEpoch: activeEpoch,
+    });
+    setStoredRefreshStatus('success');
+
+    expect(getActiveUserId()).toBe('user_A_id');
+    expect(getCurrentSessionEpoch()).toBe(activeEpoch);
+    expect(isTabSessionLoggedOut()).toBe(false);
+
+    // Simulate BroadcastChannel delivering a delayed/stale ORBIT_LOGOUT from an older epoch (e.g. 2000)
+    const channel = getBroadcastChannel();
+    if (channel && channel.onmessage) {
+      // Stale message from epoch 2000 < activeEpoch 5000
+      channel.onmessage({
+        data: { type: 'ORBIT_LOGOUT', epoch: 2000, userId: 'user_A_id' },
+      } as MessageEvent);
+
+      // Invariant: Stale message must be discarded; active session must NOT be invalidated
+      expect(getActiveUserId()).toBe('user_A_id');
+      expect(getCurrentSessionEpoch()).toBe(activeEpoch);
+      expect(isTabSessionLoggedOut()).toBe(false);
+
+      // Now send a current broadcast with epoch >= activeEpoch (e.g. 6000)
+      channel.onmessage({
+        data: { type: 'ORBIT_LOGOUT', epoch: 6000, userId: 'user_A_id' },
+      } as MessageEvent);
+
+      // Invariant: Current broadcast is authoritative; session is invalidated
+      expect(getActiveUserId()).toBeNull();
+      expect(getCurrentSessionEpoch()).toBe(0);
+      expect(isTabSessionLoggedOut()).toBe(true);
+    }
   });
 
   // ============================================================================

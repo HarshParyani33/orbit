@@ -37,10 +37,10 @@ $ python .agents/skills/gravitas/scripts/doctor.py
   1. *Ground before mutating:* Inspected Docker containers, WSL2 network bindings, NestJS CORS config, Prisma schema, Playwright headless Chrome integration, client fetch interceptors, and database init scripts before touching files.
   2. *Stay in declared scope:* Confined strictly to Milestone 1 requirements; zero premature implementation of Milestone 2 features (no WhatsApp/Instagram Graph API webhooks, no Stripe webhooks, no AI inference, no BullMQ background workers).
   3. *Completion needs fresh evidence:* Every requirement verified by automated test suites executed against live PostgreSQL 16, a real NestJS HTTP server on TCP, simulated browser execution contexts, and genuine multi-tab headless Chrome.
-  4. *Never exact-retry a failure:* Diagnosed psql dollar-quote variable substitution rules, counter-bypass conditions in sibling refresh reuse, Playwright CDP event flushing under high load, and cross-tab logout state invalidation.
+  4. *Never exact-retry a failure:* Diagnosed psql dollar-quote variable substitution rules, counter-bypass conditions in sibling refresh reuse, Playwright CDP event flushing under high load, Chromium cross-renderer IPC synchronization latency, cookie scoping mismatch on logout, and cross-tab session epoch transitions.
   5. *Satisfy the established contract:* Adhered to `docs/ARCHITECTURE.md` v1.1.5 without deviation.
   6. *Say what cannot be verified:* Explicitly documented the 15-minute stateless JWT lifetime window, browser SOP dependency for custom header CSRF defense, and deferred live webhook ingestion.
-- **Decision Records:** Recorded Decisions 1 through 21 in `docs/decisions/MILESTONE_1_DECISIONS.md`.
+- **Decision Records:** Recorded Decisions 1 through 22 in `docs/decisions/MILESTONE_1_DECISIONS.md`.
 
 ---
 
@@ -59,6 +59,7 @@ $ python .agents/skills/gravitas/scripts/doctor.py
 | **Finding 9** | P2 | Authorization RBAC | Regular members could invite users; admins could invite admins or grant owner role. | Enforced strict role hierarchy in `OrganizationsService`; regular members blocked, admins restricted to MEMBER role. | `tests/integration/security-pass.spec.ts` | **RESOLVED** |
 | **Finding 10** | P2 | Session Correlation & Auth Lifecycle | `auth-context.tsx` did not synchronize `setActiveUserId` or call `markLoggedOut()`; sibling refresh check had a counter-bypass bug; stale tabs could adopt another user's session after account switch. | Wired `setActiveUserId` and `markLoggedOut()` into auth lifecycle; eliminated counter-bypass; implemented `isTabLoggedOut` in-memory invalidation preventing stale tab credential reuse. | `apps/web/src/api/client.ts`, `apps/web/src/context/auth-context.tsx`, `tests/browser/cross-tab-refresh.browser.spec.ts` | **RESOLVED** |
 | **Finding 11** | P2 | Continuous Integration Pipeline | Missing verified GitHub Actions workflow definition for continuous integration across all workspaces, databases, and browser tests. | Authored `.github/workflows/ci.yml` providing automated verification across Node 22, PostgreSQL 16 (pgvector), Redis 7, and Playwright Chromium. | `.github/workflows/ci.yml` | **RESOLVED** |
+| **Finding 12** | P1 | Login After Logout & Cookie Scoping | Re-authenticating after logout was blocked by obsolete `logged_out` status; `refresh_token` cookie path (`/api/auth/refresh`) prevented `POST /api/auth/logout` from revoking database sessions; BroadcastChannel could adopt cross-tab session contamination or stale messages. | Implemented Decision 22: session epoch and logout epoch versioning (`LogoutRecord`); scoped `refresh_token` cookie to `/api/auth` across both login and logout; dropped `ORBIT_LOGIN` broadcast; added stale broadcast drop guard (`epoch >= currentSessionEpoch`); BroadcastChannel + storage sync to eliminate Chromium cross-process IPC lag. | `apps/api/src/auth/auth.controller.ts`, `apps/web/src/api/client.ts`, `tests/unit/cross-tab-refresh.spec.ts`, `tests/browser/cross-tab-refresh.browser.spec.ts` | **RESOLVED** |
 
 ---
 
@@ -72,11 +73,13 @@ $ python .agents/skills/gravitas/scripts/doctor.py
 | **Fail-Fast Configuration** | `packages/config/src/index.ts`, `apps/api/src/main.ts` | `tests/unit/config-jwt.spec.ts`, `tests/integration/bootstrap.spec.ts` | **VERIFIED** |
 | **Argon2id Hashing & JWT** | `apps/api/src/auth/auth.service.ts`, `token.service.ts` | `tests/integration/auth.spec.ts` | **VERIFIED** |
 | **Token Rotation & Replay Detection** | `apps/api/src/auth/auth.service.ts`, `userSession` model | `tests/integration/auth.spec.ts`, `Scenario 3` browser test | **VERIFIED** |
+| **Cookie Scoping & Session Revocation** | `apps/api/src/auth/auth.controller.ts` (path: `/api/auth`) | `tests/integration/auth.spec.ts`, `Scenario 8` browser test | **VERIFIED** |
 | **Multi-Tenant Isolation** | `apps/api/src/tenancy/tenant-transaction-runner.ts` | `tests/integration/tenant-isolation.spec.ts` | **VERIFIED** |
 | **CSRF & CORS Defense** | `apps/api/src/auth/csrf.guard.ts`, `app.config.ts` | `tests/integration/http-cors-csrf.spec.ts` | **VERIFIED** |
 | **Cross-Tab Web Locks Mutex** | `apps/web/src/api/client.ts` (`navigator.locks`) | `tests/browser/cross-tab-refresh.browser.spec.ts` (Scenarios 1, 4, 5) | **VERIFIED** |
 | **Fail-Closed Fallback Safety** | `apps/web/src/api/client.ts` | `tests/unit/cross-tab-refresh.spec.ts` (Test 6), Scenario 2 | **VERIFIED** |
 | **Session Correlation & Account Switch** | `apps/web/src/api/client.ts`, `auth-context.tsx` | `tests/browser/cross-tab-refresh.browser.spec.ts` (Scenarios 6, 7) | **VERIFIED** |
+| **Login After Logout & Epoch Correlation** | `apps/web/src/api/client.ts`, `auth-context.tsx` | `tests/unit/cross-tab-refresh.spec.ts` (Tests 8b, 8c), Scenario 8 | **VERIFIED** |
 | **Minimal React 18 Dashboard** | `apps/web/src/*`, Tailwind CSS, React Hook Form | `npm run build` (Vite build clean, 0 bundle errors) | **VERIFIED** |
 | **Continuous Integration CI** | `.github/workflows/ci.yml` | Workflow YAML lint & configuration validation | **VERIFIED** |
 
@@ -88,13 +91,13 @@ The repository test suite is rigorously classified into four distinct verificati
 
 ```
 Test Files  10 passed (10)
-     Tests  106 passed (106)
-  Duration  15.63s
+     Tests  109 passed (109)
+  Duration  19.50s
 ```
 
 ### 4.1 Tier 1: Real Multi-Tab Browser Tests (Playwright & Headless Google Chrome)
 * **Execution:** Real headless Google Chrome on Windows with genuinely separate pages in the same browser context sharing cookies.
-* **Test File:** `tests/browser/cross-tab-refresh.browser.spec.ts` (7 tests, 0 failures):
+* **Test File:** `tests/browser/cross-tab-refresh.browser.spec.ts` (8 tests, 0 failures):
   1. *Scenario 1 (Web Locks Enabled):* 2 tabs simultaneously receive 401 on protected requests. Web Locks serializes execution to **exactly 1** `/api/auth/refresh` request. Both tabs recover with 200 OK. Database session family remains healthy (1 active rotated session, 1 consumed revoked session).
   2. *Scenario 2 (Fail-Closed Safety without Web Locks):* Web Locks disabled at `Navigator.prototype` level across both pages. Both pages fail closed safely with **zero** network refresh requests and zero database session damage.
   3. *Scenario 3 (Server Replay Detection):* Replaying a consumed refresh token directly from Chrome triggers server-side `THEFT_DETECTED`, returns 401, and immediately revokes all sessions in PostgreSQL.
@@ -102,11 +105,12 @@ Test Files  10 passed (10)
   5. *Scenario 5 (Tab Closure Recovery):* Tab holding lock is abruptly closed. Browser engine cleanly releases lock to waiting sibling tab; sibling acquires lock and recovers successfully.
   6. *Scenario 6 (Account Switch Invariant):* User A in Tab 1 switches to User B. Tab 2 (holding User A's identity) encounters 401 and is blocked from reusing User B's rotated session, failing closed safely with `Session expired or revoked`.
   7. *Scenario 7 (Cross-Tab Logout Propagation):* Tab 1 logs out, broadcasting `ORBIT_LOGOUT`. Tab 2 immediately invalidates its session and rejects subsequent protected requests without attempting token refresh.
+  8. *Scenario 8 (Login After Logout):* User logs out in Tab 1 (setting `orbit_auth_logout_record` and `isTabLoggedOut`). Re-authenticating in Tab 1 establishes a newer session generation (`sessionEpoch > logoutEpoch`). Subsequent 401 triggers clean token refresh and recovery. In PostgreSQL, previous session is confirmed revoked and exactly 1 active session exists.
 
 ### 4.2 Tier 2: Simulated Context & Unit Tests (Vitest)
 * **Test Files:**
   - `tests/unit/client-refresh.spec.ts` (6 tests): Single-flight promise sharing, in-tab monotonic stale 401 interception, simultaneous caller batching.
-  - `tests/unit/cross-tab-refresh.spec.ts` (11 tests): Web Locks serialization, stale 401 interception, fail-closed lock abort, interim sibling reuse, zero token leakage, fail-closed missing Web Locks, session correlation account-switch rejection, logout state clearing, formal proof of localStorage election race flaw, and adversarial stale owner lease recovery.
+  - `tests/unit/cross-tab-refresh.spec.ts` (13 tests): Web Locks serialization, stale 401 interception, fail-closed lock abort, interim sibling reuse, zero token leakage, fail-closed missing Web Locks, session correlation account-switch rejection, logout state clearing, formal proof of localStorage election race flaw, adversarial stale owner lease recovery, login after logout epoch advancement (Test 8b), and stale broadcast drop invariant (Test 8c).
   - `tests/unit/config-jwt.spec.ts` (8 tests): Environment configuration validation, production 32-character secret enforcement, fail-fast schema validation.
 
 ### 4.3 Tier 3: Real Database & Tenant Isolation Tests (PostgreSQL 16)
@@ -116,7 +120,7 @@ Test Files  10 passed (10)
 
 ### 4.4 Tier 4: Real HTTP TCP Integration Tests (NestJS & Supertest)
 * **Test Files:**
-  - `tests/integration/auth.spec.ts` (11 tests): Registration, Argon2id login, session family rotation, replay detection revocation, logout cookie clearing.
+  - `tests/integration/auth.spec.ts` (11 tests): Registration, Argon2id login, session family rotation, replay detection revocation, logout cookie clearing and database revocation.
   - `tests/integration/bootstrap.spec.ts` (3 tests): Single authoritative listen on `config.PORT`, fail-fast configuration validation before socket creation, configuration cache isolation.
   - `tests/integration/security-pass.spec.ts` (32 tests): IDOR route parameter enforcement, RBAC invitation restrictions, atomic registration rollback.
   - `tests/integration/http-cors-csrf.spec.ts` (10 tests): Same-origin host alignment, `X-Requested-With` CSRF verification, cross-site origin blocking.

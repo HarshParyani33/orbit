@@ -41,14 +41,14 @@ export class AuthController {
       httpOnly: true,
       secure: isProduction,
       sameSite: 'lax',
-      path: '/api/auth/refresh',
+      path: '/api/auth',
       maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
     });
   }
 
   private clearCookies(res: Response) {
     res.clearCookie('access_token', { path: '/' });
-    res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
+    res.clearCookie('refresh_token', { path: '/api/auth' });
   }
 
   @Post('register')

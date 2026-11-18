@@ -243,6 +243,28 @@ Diagnostic execution of `python .agents/skills/gravitas/scripts/doctor.py` confi
   - **21.4 Cross-Platform Real Browser Lifecycle Tests:** Add real multi-page browser tests verifying cross-tab account switching (User A in Tab 1, User B in Tab 2), multi-tab logout propagation, and clean profile restoration.
   - **21.5 CI Workflow Provisioning:** Author `.github/workflows/ci.yml` providing reproducible automated verification across Node 24, PostgreSQL 16 with pgvector, Redis 7, and Playwright headless Chromium.
 
+### Decision 22: Session-Aware Authentication Lifecycle State Machine, Versioned Logout Epochs & Cross-Tab Broadcast Hardening
+- **Context:** An adversarial analysis of the multi-tab authentication lifecycle identified potential race conditions and edge cases:
+  1. Login after logout: After `markLoggedOut()`, `orbit_auth_last_refresh_status` was set to unversioned `'logged_out'`. A subsequent login in the same or sibling tab could leave an obsolete `'logged_out'` marker in shared storage if active identity was restored without a full storage rewrite, causing future token refreshes to falsely reject legitimate sessions.
+  2. In-memory `isTabLoggedOut` flag unconditionally blocked all non-auth endpoints, preventing `/api/auth/me` (`refreshProfile`) from verifying valid ambient session cookies.
+  3. `BroadcastChannel` event handlers for `ORBIT_LOGOUT` and `ORBIT_REFRESH_FAILED` acted unconditionally, allowing delayed or out-of-order broadcast messages from previous session epochs to corrupt newer authenticated sessions.
+- **Decision:**
+  - **22.1 Explicit Session Generation & Logout Epoch Versioning:**
+    - Shared session state maintains `STORAGE_KEY_SESSION_CORRELATION` (`{ userId: string, sessionEpoch: number }`) and `STORAGE_KEY_LOGOUT_RECORD` (`orbit_auth_logout_record`: `{ userId: string | null, logoutEpoch: number }`).
+    - In-memory state tracks `currentSessionEpoch: number` alongside `currentUserId`.
+    - A logout is active and authoritative for an execution context if and only if `logoutEpoch >= currentSessionEpoch`.
+    - When a fresh session is established (`login`, `register`, or successful `/api/auth/me`), `sessionEpoch` is updated to `nowEpoch` (`> logoutEpoch`), establishing a fresh session generation that deterministically supersedes older logouts.
+  - **22.2 Profile Restoration (`/api/auth/me`) Synchronization:**
+    - Permit `/api/auth/me` to execute across network even if `isTabLoggedOut` was previously set, allowing genuine cookie verification upon page load.
+    - If `/api/auth/me` returns 200 OK, synchronize in-memory and shared session state (`isTabLoggedOut = false`, `currentUserId = data.user.id`, `sessionEpoch = nowEpoch`, `setStoredRefreshStatus('success')`).
+    - If `/api/auth/me` returns 401, fail closed safely.
+  - **22.3 Stale Broadcast Drop Invariant:**
+    - All coordination events (`ORBIT_LOGOUT`, `ORBIT_LOGIN`, `ORBIT_REFRESH_COMPLETE`, `ORBIT_REFRESH_FAILED`) carry `epoch: number` and `userId?: string`.
+    - `onmessage` handlers strictly verify that `event.data.epoch >= currentSessionEpoch`. Messages with an epoch strictly less than the active session epoch are discarded as stale, preventing delayed messages from invalidating newer sessions.
+  - **22.4 Account Switch & Web Locks Invariant Preservation:**
+    - Preserve strict account-switch mismatch rejection: if `currentUserId` exists and differs from `correlation.userId`, fail closed immediately.
+    - Web Locks API (`navigator.locks`) remains the sole authoritative cross-tab mutex with strict fail-closed safety when unavailable. Zero uncoordinated refreshes are permitted.
+
 
 ---
 
