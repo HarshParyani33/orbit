@@ -68,7 +68,7 @@ This document records the architectural and engineering decisions for **Mileston
 
 ## Decision 36: Embedding Service, Chunking Engine & Multi-Tenant Ingestion Pipeline (Milestone 4 Slice 4.2)
 
-- **Status:** APPROVED & VERIFIED (Commit pending, local 15/15 tests green)
+- **Status:** APPROVED & VERIFIED (Commit `93c3cbf`, CI Run `44339711414`)
 - **Date:** 2026-11-18
 - **Context:**
   Having established the relational and pgvector schema in Slice 4.1, Project Orbit requires an automated knowledge ingestion pipeline that:
@@ -122,6 +122,72 @@ This document records the architectural and engineering decisions for **Mileston
     - HTTP API endpoints with `JwtAuthGuard` and `TenantGuard` authentication and authorization.
   - Monorepo full test suite: 278/278 passed across all 24 test suites.
   - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
+  - **GitHub Actions CI Verification:** [CI Run #44339711414](https://github.com/HarshParyani33/orbit/actions/runs/44339711414) completed with conclusion `success` across all 17 pipeline steps.
 
+---
 
+## Decision 37: Multi-Tenant Vector Retrieval Engine & Semantic Search API (Milestone 4 Slice 4.3)
+
+- **Status:** APPROVED & VERIFIED (Commit pending, local 8/8 tests green)
+- **Date:** 2026-11-18
+- **Context:**
+  With documents and vector chunks stored in PostgreSQL 16 via pgvector, Project Orbit requires a dedicated vector retrieval engine that performs semantic similarity searches against tenant knowledge.
+  
+  The vector retrieval engine must strictly enforce multi-tenant boundaries:
+  1. Under no conditions should Tenant A's query retrieve or match any chunks belonging to Tenant B, even with identical query embeddings or direct vector queries.
+  2. The cosine similarity query uses pgvector's `<=>` operator within `TenantTransactionRunner.runWithTenant(organizationId)`, ensuring PostgreSQL RLS policy filters all rows before and during nearest-neighbor calculation.
+  3. Relevance filtering: results falling below `minSimilarity` threshold (default: 0.70) are discarded to protect against irrelevant retrieval.
+  4. Top-K ranking: returns top-K results (default: 5, max: 20) ordered by similarity descending.
+  5. The API exposes `POST /api/knowledge/search` protected by `JwtAuthGuard` and `TenantGuard`.
+
+- **Decision:**
+  1. **Knowledge Retrieval Engine (`KnowledgeService.searchSimilarChunks` in `@orbit/api`):**
+     - Accepts `SearchKnowledgeInput`: `{ query: string, limit?: number, minSimilarity?: number }`.
+     - Generates query embedding vector via `this.embeddingProvider.generateEmbedding(query)`.
+     - Executes raw SQL query via `tx.$queryRaw` within `this.tenantRunner.runWithTenant(orgId)`:
+       ```sql
+       SELECT 
+         c.id,
+         c.document_id AS "documentId",
+         c.chunk_index AS "chunkIndex",
+         c.chunk_text AS "chunkText",
+         c.token_count AS "tokenCount",
+         d.title AS "documentTitle",
+         d.source_type AS "documentSourceType",
+         ROUND((1 - (c.embedding <=> ${vectorStr}::vector))::numeric, 4)::float AS similarity
+       FROM "knowledge_chunks" c
+       JOIN "knowledge_documents" d 
+         ON c.document_id = d.id 
+        AND c.organization_id = d.organization_id
+       WHERE 1 - (c.embedding <=> ${vectorStr}::vector) >= ${minSimilarity}
+       ORDER BY c.embedding <=> ${vectorStr}::vector ASC
+       LIMIT ${limit};
+       ```
+     - Returns `{ query, totalMatched, results }`.
+  2. **Validation Schema (`@orbit/validation`):**
+     - `searchKnowledgeSchema`:
+       - `query`: string min 1, max 1000
+       - `limit`: number optional min 1, max 20, default 5
+       - `minSimilarity`: number optional min 0.0, max 1.0, default 0.70
+     - `SearchKnowledgeInput` type.
+  3. **REST API Endpoint (`KnowledgeController` in `@orbit/api`):**
+     - `POST /api/knowledge/search`
+     - Authenticated with `JwtAuthGuard` and `TenantGuard`.
+     - Request body validated with `searchKnowledgeSchema`.
+     - Emits standard `ApiResponse` wrapper `{ success: true, data: searchResult }`.
+
+- **Evidence & Verification:**
+  - Implemented `KnowledgeService.searchSimilarChunks` in `@orbit/api` executing pgvector cosine distance `<=>` within PostgreSQL RLS boundaries.
+  - Implemented `POST /api/knowledge/search` in `KnowledgeController` protected by `JwtAuthGuard` and `TenantGuard`.
+  - Added `searchKnowledgeSchema` in `@orbit/validation`.
+  - Authored and executed automated integration test suite `tests/integration/knowledge-retrieval.spec.ts` (8 tests) verifying:
+    - High similarity retrieval for semantically matching queries.
+    - Low similarity rejection / threshold filtering when queries fall below `minSimilarity`.
+    - Limit constraint enforcement (default 5, respects requested limit).
+    - Multi-tenant isolation: Tenant B searching with exact matching queries never sees Tenant A chunks.
+    - Missing tenant context or unauthenticated requests fail closed (`401 Unauthorized`).
+    - Input validation rejecting invalid or oversized queries (`400 Bad Request`).
+    - HTTP endpoint contract verification for `POST /api/knowledge/search`.
+  - Monorepo full test suite: 286/286 passed across all 25 test suites.
+  - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
 

@@ -231,7 +231,15 @@ export const listKnowledgeDocumentsQuerySchema = z.object({
   search: z.string().optional(),
 });
 
+export const searchKnowledgeSchema = z.object({
+  query: z.string().min(1, 'Query is required').max(1000, 'Query exceeds 1000 characters').trim(),
+  limit: z.coerce.number().int().min(1).max(20).default(5),
+  minSimilarity: z.coerce.number().min(0).max(1).default(0.7),
+});
+
 export type CreateKnowledgeDocumentInput = z.infer<typeof createKnowledgeDocumentSchema>;
 export type ListKnowledgeDocumentsQuery = z.infer<typeof listKnowledgeDocumentsQuerySchema>;
+export type SearchKnowledgeInput = z.infer<typeof searchKnowledgeSchema>;
+
 
 

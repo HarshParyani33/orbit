@@ -16,8 +16,10 @@ import {
 import {
   CreateKnowledgeDocumentInput,
   ListKnowledgeDocumentsQuery,
+  SearchKnowledgeInput,
   createKnowledgeDocumentSchema,
   listKnowledgeDocumentsQuerySchema,
+  searchKnowledgeSchema,
 } from '@orbit/validation';
 
 export interface KnowledgeDocumentSummary {
@@ -31,6 +33,23 @@ export interface KnowledgeDocumentSummary {
   chunkCount: number;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface MatchedChunkResult {
+  id: string;
+  documentId: string;
+  chunkIndex: number;
+  chunkText: string;
+  tokenCount: number;
+  documentTitle: string;
+  documentSourceType: string;
+  similarity: number;
+}
+
+export interface KnowledgeSearchResult {
+  query: string;
+  totalMatched: number;
+  results: MatchedChunkResult[];
 }
 
 export interface PaginatedKnowledgeDocuments {
@@ -254,6 +273,58 @@ export class KnowledgeService {
       return {
         success: true,
         message: 'Knowledge document deleted successfully',
+      };
+    });
+  }
+
+  /**
+   * Performs semantic vector similarity search using pgvector cosine distance (<=>)
+   * within tenant RLS boundary, filtering chunks below minSimilarity threshold.
+   */
+  public async searchSimilarChunks(
+    orgId: string,
+    rawInput: SearchKnowledgeInput,
+  ): Promise<KnowledgeSearchResult> {
+    const input = searchKnowledgeSchema.parse(rawInput);
+    const limit = input.limit ?? 5;
+    const minSimilarity = input.minSimilarity ?? 0.7;
+
+    const queryEmbedding = await this.embeddingProvider.generateEmbedding(input.query);
+    const vectorStr = `[${queryEmbedding.join(',')}]`;
+
+    return this.tenantRunner.runWithTenant(orgId, async (tx) => {
+      const rows = await tx.$queryRaw<Array<{
+        id: string;
+        documentId: string;
+        chunkIndex: number;
+        chunkText: string;
+        tokenCount: number;
+        documentTitle: string;
+        documentSourceType: string;
+        similarity: number;
+      }>>`
+        SELECT 
+          c.id,
+          c.document_id AS "documentId",
+          c.chunk_index AS "chunkIndex",
+          c.chunk_text AS "chunkText",
+          c.token_count AS "tokenCount",
+          d.title AS "documentTitle",
+          d.source_type AS "documentSourceType",
+          ROUND((1 - (c.embedding <=> ${vectorStr}::vector))::numeric, 4)::float AS similarity
+        FROM "knowledge_chunks" c
+        JOIN "knowledge_documents" d 
+          ON c.document_id = d.id 
+         AND c.organization_id = d.organization_id
+        WHERE 1 - (c.embedding <=> ${vectorStr}::vector) >= ${minSimilarity}
+        ORDER BY c.embedding <=> ${vectorStr}::vector ASC
+        LIMIT ${limit};
+      `;
+
+      return {
+        query: input.query,
+        totalMatched: rows.length,
+        results: rows,
       };
     });
   }

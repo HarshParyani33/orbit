@@ -9,6 +9,7 @@ import {
   UseGuards,
   Inject,
   ParseUUIDPipe,
+  BadRequestException,
 } from '@nestjs/common';
 import { KnowledgeService } from './knowledge.service';
 import { JwtAuthGuard } from '../auth/auth.guard';
@@ -18,6 +19,10 @@ import { TenantContext, ApiResponse } from '@orbit/shared';
 import {
   CreateKnowledgeDocumentInput,
   ListKnowledgeDocumentsQuery,
+  SearchKnowledgeInput,
+  createKnowledgeDocumentSchema,
+  listKnowledgeDocumentsQuerySchema,
+  searchKnowledgeSchema,
 } from '@orbit/validation';
 
 @Controller('api/knowledge')
@@ -31,21 +36,60 @@ export class KnowledgeController {
   @Post('documents')
   async createDocument(
     @CurrentTenant() tenant: TenantContext,
-    @Body() body: CreateKnowledgeDocumentInput,
+    @Body() body: unknown,
   ): Promise<ApiResponse> {
-    const doc = await this.knowledgeService.createDocument(tenant.orgId, body);
+    const parsed = createKnowledgeDocumentSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException({
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid knowledge document input',
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const doc = await this.knowledgeService.createDocument(tenant.orgId, parsed.data);
     return {
       success: true,
       data: doc,
     };
   }
 
+  @Post('search')
+  async searchKnowledge(
+    @CurrentTenant() tenant: TenantContext,
+    @Body() body: unknown,
+  ): Promise<ApiResponse> {
+    const parsed = searchKnowledgeSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException({
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid search input',
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const results = await this.knowledgeService.searchSimilarChunks(tenant.orgId, parsed.data);
+    return {
+      success: true,
+      data: results,
+    };
+  }
+
   @Get('documents')
   async listDocuments(
     @CurrentTenant() tenant: TenantContext,
-    @Query() query: ListKnowledgeDocumentsQuery,
+    @Query() query: unknown,
   ): Promise<ApiResponse> {
-    const result = await this.knowledgeService.listDocuments(tenant.orgId, query);
+    const parsed = listKnowledgeDocumentsQuerySchema.safeParse(query ?? {});
+    if (!parsed.success) {
+      throw new BadRequestException({
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid list query',
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const result = await this.knowledgeService.listDocuments(tenant.orgId, parsed.data);
     return {
       success: true,
       data: result,
