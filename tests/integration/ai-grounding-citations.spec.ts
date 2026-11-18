@@ -41,8 +41,29 @@ describe('Milestone 4 Slice 4.4: Evidence-Based AI Grounding & Citation Validati
     channelsService = app.get(ChannelsService);
     conversationsService = app.get(ConversationsService);
 
-    const org = await prisma.organization.findUniqueOrThrow({ where: { slug: 'acme' } });
+    const testOrgSlug = `grounding-org-${Date.now()}`;
+    const org = await prisma.organization.create({
+      data: {
+        name: 'Grounding Verification Org',
+        slug: testOrgSlug,
+      },
+    });
     orgId = org.id;
+
+    // Create owner user and membership
+    await prisma.user.create({
+      data: {
+        email: `grounding-owner-${Date.now()}@example.com`,
+        name: 'Grounding Test Owner',
+        passwordHash: '$2b$12$eX4mPl3H4sH000000000000000000000000000000000000000000',
+        memberships: {
+          create: {
+            organizationId: org.id,
+            role: 'OWNER',
+          },
+        },
+      },
+    });
 
     // Create channel for conversations
     const channel = await channelsService.createChannel(orgId, {
@@ -107,9 +128,17 @@ describe('Milestone 4 Slice 4.4: Evidence-Based AI Grounding & Citation Validati
           where: { channelId },
         });
         await tx.knowledgeDocument.deleteMany({
-          where: { title: { startsWith: 'Grounding Test' } },
+          where: { organizationId: orgId },
         });
+        await tx.aiUsageEvent.deleteMany({ where: { organizationId: orgId } });
+        await tx.aiRequestAttempt.deleteMany({ where: { organizationId: orgId } });
+        await tx.aiRequest.deleteMany({ where: { organizationId: orgId } });
+        await tx.aiConfiguration.deleteMany({ where: { organizationId: orgId } });
+        await tx.channel.deleteMany({ where: { organizationId: orgId } });
       });
+      await prisma.organizationMembership.deleteMany({ where: { organizationId: orgId } });
+      await prisma.user.deleteMany({ where: { email: { startsWith: 'grounding-owner-' } } });
+      await prisma.organization.delete({ where: { id: orgId } });
     } catch {
       // Ignore cleanup errors
     }
