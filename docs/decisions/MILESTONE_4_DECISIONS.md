@@ -1,7 +1,7 @@
 # Project Orbit — Milestone 4 Architecture & Engineering Decisions
 ## Knowledge Base Embeddings, pgvector, Vector RAG Pipeline & Multi-Tenant Knowledge Retrieval
 
-This document records the architectural and engineering decisions for **Milestone 4**, establishing a multi-tenant knowledge retrieval pipeline, pgvector semantic search, chunking engine, evidence-based AI grounding, and citation validation under Gravitas Core Skill Mode governance.
+This document records the architectural and engineering decisions for **Milestone 4**, establishing a multi-tenant knowledge retrieval pipeline, pgvector semantic search, chunking engine, evidence-based AI grounding, citation validation, and knowledge management dashboard under Gravitas Core Skill Mode governance.
 
 ---
 
@@ -196,7 +196,7 @@ This document records the architectural and engineering decisions for **Mileston
 
 ## Decision 38: Evidence-Based AI Grounding & Citation Validation Pipeline (Milestone 4 Slice 4.4)
 
-- **Status:** APPROVED & VERIFIED (Commit pending, local 8/8 tests green)
+- **Status:** APPROVED & VERIFIED (Commit `8899915`, CI Run `44343364912`)
 - **Date:** 2026-11-18
 - **Context:**
   Conforming to `docs/ARCHITECTURE.md` Section 9 ("Evidence-Based AI Grounding & Verification"), vector similarity measures retrieval relevance, never factual correctness.
@@ -230,4 +230,45 @@ This document records the architectural and engineering decisions for **Mileston
     - End-to-end integration with `AiService.generateSuggestion`.
   - Monorepo full test suite: 294/294 passed across all 26 test suites.
   - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
+  - **GitHub Actions CI Verification:** [CI Run #44343364912](https://github.com/HarshParyani33/orbit/actions/runs/44343364912) completed with conclusion `success` across all 17 pipeline steps.
 
+---
+
+## Decision 39: Knowledge Base Frontend UI & Interactive Management Dashboard (Milestone 4 Slice 4.5)
+
+- **Status:** APPROVED & VERIFIED (Commit for Slice 4.5)
+- **Date:** 2026-11-18
+- **Context:**
+  Having built the complete vector backend pipeline (pgvector schema, chunking engine, embedding service, semantic vector retrieval, and deterministic evidence-based grounding), Project Orbit requires a user-facing Knowledge Base dashboard in `@orbit/web`.
+  
+  The Knowledge Base UI must empower business owners and agents to:
+  1. Inspect existing knowledge documents with source type tags (`FAQ`, `POLICY`, `MANUAL_ENTRY`, `DOCUMENT_UPLOAD`), creation timestamps, chunk counts, and live search filtering.
+  2. Create new knowledge documents with real-time feedback and automatic chunking preview.
+  3. View document details and inspect individual chunk segments with chunk indices and token counts.
+  4. Perform interactive semantic search queries with similarity score visualizers and matched chunk previews.
+  5. Delete documents with immediate query invalidation and confirmation.
+  6. Multi-tenant isolation: all document queries, creations, and test searches are strictly scoped to the active organization.
+
+- **Decision:**
+  1. **Knowledge API Client (`apps/web/src/api/knowledge.ts`):**
+     - `listKnowledgeDocuments(query)`: calls `GET /api/knowledge/documents`.
+     - `getKnowledgeDocument(id)`: calls `GET /api/knowledge/documents/:id`.
+     - `createKnowledgeDocument(data)`: calls `POST /api/knowledge/documents`.
+     - `deleteKnowledgeDocument(id)`: calls `DELETE /api/knowledge/documents/:id`.
+     - `searchKnowledge(query, limit, minSimilarity)`: calls `POST /api/knowledge/search`.
+  2. **Knowledge Base Page Component (`apps/web/src/pages/KnowledgeBasePage.tsx`):**
+     - Tabbed navigation in `Navbar.tsx` (`activeTab: 'inbox' | 'channels' | 'knowledge'`).
+     - Document management list view with search filter, source type badges, and chunk count.
+     - "Add Document" modal / panel with title, source type selector, and content text area.
+     - Document detail drawer showing document metadata and individual segmented chunks with token counts.
+     - Interactive Semantic Search Sandbox: enables testing queries against pgvector with real-time similarity score bars.
+  3. **Multi-Tenant State Synchronization:**
+     - Uses TanStack Query (`useQuery`, `useMutation`, `queryClient.invalidateQueries`) keyed by active organization ID.
+
+- **Evidence & Verification:**
+  - Implemented `apps/web/src/api/knowledge.ts` with comprehensive typed methods.
+  - Implemented `apps/web/src/pages/KnowledgeBasePage.tsx` with full responsive UI.
+  - Wired into `Navbar.tsx` and `App.tsx` with seamless tab switching.
+  - Authored unit test suite `tests/unit/knowledge-client.spec.ts` (6 tests) verifying all API client methods, headers, serializations, and error handling.
+  - Monorepo full test suite: 300/300 passed across all 27 test suites.
+  - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (production Vite bundle) all cleanly pass with exit code 0.

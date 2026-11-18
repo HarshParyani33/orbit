@@ -1,10 +1,10 @@
 import React from 'react';
 import { useAuth } from '../context/auth-context';
-import { Building2, LogOut, UserCircle2, Inbox, Layers } from 'lucide-react';
+import { Building2, LogOut, UserCircle2, Inbox, Layers, BookOpen } from 'lucide-react';
 
 interface NavbarProps {
-  activeTab: 'inbox' | 'channels';
-  onSelectTab: (tab: 'inbox' | 'channels') => void;
+  activeTab: 'inbox' | 'channels' | 'knowledge';
+  onSelectTab: (tab: 'inbox' | 'channels' | 'knowledge') => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
@@ -44,6 +44,17 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
             >
               <Layers className="w-4 h-4" />
               <span>Channels & Settings</span>
+            </button>
+            <button
+              onClick={() => onSelectTab('knowledge')}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                activeTab === 'knowledge'
+                  ? 'bg-indigo-50 text-indigo-700'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <BookOpen className="w-4 h-4" />
+              <span>Knowledge Base</span>
             </button>
           </nav>
 
