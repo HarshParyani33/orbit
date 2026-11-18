@@ -55,10 +55,24 @@ class MockStorage implements Storage {
 describe('Cross-Tab Refresh Token Coordination Tests', () => {
   const originalFetch = globalThis.fetch;
   const originalLocalStorage = globalThis.localStorage;
+  const originalLocks = (globalThis as any).navigator?.locks;
 
   beforeEach(() => {
     vi.restoreAllMocks();
     globalThis.localStorage = new MockStorage();
+    if (typeof (globalThis as any).navigator === 'undefined') {
+      (globalThis as any).navigator = {};
+    }
+    Object.defineProperty(navigator, 'locks', {
+      value: {
+        request: vi.fn().mockImplementation(async (_name: string, optionsOrCallback: any, maybeCallback?: any) => {
+          const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
+          return callback();
+        }),
+      },
+      configurable: true,
+      writable: true,
+    });
     resetClientState();
   });
 
@@ -68,6 +82,15 @@ describe('Cross-Tab Refresh Token Coordination Tests', () => {
       globalThis.localStorage = originalLocalStorage;
     } else {
       delete (globalThis as any).localStorage;
+    }
+    if (originalLocks) {
+      Object.defineProperty(navigator, 'locks', {
+        value: originalLocks,
+        configurable: true,
+        writable: true,
+      });
+    } else {
+      delete (navigator as any).locks;
     }
     resetClientState();
   });
@@ -454,13 +477,6 @@ describe('Cross-Tab Refresh Token Coordination Tests', () => {
       }
       return { ok: true, status: 200, json: async () => ({ success: true }) };
     });
-
-    // Mock Web Locks API to succeed
-    (navigator as any).locks = {
-      request: vi.fn().mockImplementation(async (_name, _options, callback) => {
-        return callback();
-      }),
-    };
 
     const refreshResult = await requestTokenRefresh();
     expect(refreshResult).toBe(true);

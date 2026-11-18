@@ -8,14 +8,37 @@ import {
 
 describe('Frontend Single-Flight Refresh Concurrency Unit Tests', () => {
   const originalFetch = globalThis.fetch;
+  const originalLocks = (globalThis as any).navigator?.locks;
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    if (typeof (globalThis as any).navigator === 'undefined') {
+      (globalThis as any).navigator = {};
+    }
+    Object.defineProperty(navigator, 'locks', {
+      value: {
+        request: vi.fn().mockImplementation(async (_name: string, optionsOrCallback: any, maybeCallback?: any) => {
+          const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
+          return callback();
+        }),
+      },
+      configurable: true,
+      writable: true,
+    });
     resetClientState();
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    if (originalLocks) {
+      Object.defineProperty(navigator, 'locks', {
+        value: originalLocks,
+        configurable: true,
+        writable: true,
+      });
+    } else {
+      delete (navigator as any).locks;
+    }
   });
 
   it('1. single call to requestTokenRefresh calls /api/auth/refresh and returns true on 200', async () => {
