@@ -208,6 +208,8 @@ This document records the architectural and engineering decisions for **Mileston
   - 13 comprehensive integration tests in `tests/integration/widget.spec.ts` covering session initialization, visitor persistence without duplicates, allowed domains enforcement, provider gating (rejecting WhatsApp channels), dashboard route isolation (403 Forbidden on JwtAuthGuard), bi-directional message exchange, status re-opening on incoming customer messages, and rate limit abuse protection.
   - Full test suite: 188/188 tests passing across all 16 suites.
   - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
+  - **GitHub Actions CI Verification:** [CI Run #44315972086](https://github.com/HarshParyani33/orbit/actions/runs/44315972086) completed with conclusion `success` across all 17 pipeline steps.
+
 
 
 
