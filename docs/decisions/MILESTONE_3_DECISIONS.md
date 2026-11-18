@@ -94,3 +94,44 @@ This document records the architectural and engineering decisions for **Mileston
   - Full test suite: 220/220 tests passing across all 19 suites.
   - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
   - **GitHub Actions CI Verification:** [CI Run #44324562676](https://github.com/HarshParyani33/orbit/actions/runs/44324562676) completed with conclusion `success` across all 17 pipeline steps.
+
+---
+
+## Decision 32: Meta Instagram Inbound Webhook Processing & Channel Adapter (Milestone 3 Slice 3.3)
+
+- **Status:** APPROVED & IN IMPLEMENTATION
+- **Date:** 2026-11-18
+- **Context:**
+  Milestone 3 Slice 3.3 introduces full two-way Meta Instagram Messaging integration to Project Orbit.
+  Per `docs/PROJECT_CONTEXT.md` Module 6 and `docs/ARCHITECTURE.md` Section 7:
+  1. Inbound Instagram messages arriving at `POST /api/webhooks/instagram` must be parsed, deduplicated, linked to the customer CRM identity, mapped into unified conversations, and appended as messages.
+  2. Customer resolution must map Instagram Scoped User IDs (IGSID) to `CustomerChannelIdentity` with `verified: true` (since IGSIDs are cryptographic user IDs issued by Meta).
+  3. Re-opens snoozed/resolved conversations when an Instagram user replies.
+  4. Triggers the automation engine (`MESSAGE_RECEIVED`) and real-time WebSocket notifications to human agents.
+  5. Outbound agent replies must invoke the Instagram adapter (`IInstagramAdapter`), recording message delivery status and external message ID.
+
+- **Architectural Specifications & Invariants:**
+  1. **Instagram Ingestion Service (`InstagramIngestionService`):**
+     - Extracts message envelope: `mid`, sender `IGSID`, message text.
+     - Customer CRM Linking:
+       - Queries `CustomerChannelIdentity` within tenant context for `provider: 'META_INSTAGRAM'`, `externalId: igsid`.
+       - If missing, creates `Customer` with `name: 'Instagram User ' + igsid`, `metadata: { igsid, provider: 'META_INSTAGRAM' }` and creates `CustomerChannelIdentity` with `verified: true`.
+     - Conversation Thread Continuity:
+       - Finds active conversation for `(channelId, customerId)`.
+       - Re-opens `SNOOZED` conversation to `OPEN`.
+       - Creates new `Conversation` if no active conversation exists (`title: 'Instagram: ' + igsid`).
+     - Appends `Message` (`senderType: 'CUSTOMER'`).
+     - Emits WebSocket event and triggers automation rules.
+  2. **Instagram Adapter Abstraction (`@orbit/integrations`):**
+     - `IInstagramAdapter` contract with `sendMessage(params: InstagramSendParams)`.
+     - `MockInstagramAdapter` with deterministic responses and simulated latency.
+     - In `ConversationsService.createMessage`: if `senderType === 'AGENT'` and channel is `META_INSTAGRAM`, invokes adapter and records outbound message dispatch.
+
+- **Evidence & Verification:**
+  - Automated integration tests covering:
+    - Inbound Instagram DM message parsing, customer identity creation, and thread creation.
+    - Customer thread continuity: multiple messages from the same IGSID append to the same thread.
+    - Re-opening snoozed conversations on user reply.
+    - Automation engine trigger and real-time event dispatch.
+    - Outbound agent message dispatch via Instagram adapter.
+    - Multi-tenant RLS isolation.

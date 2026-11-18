@@ -16,6 +16,7 @@ import { getConfig } from '@orbit/config';
 import { IngressDatabaseService } from './ingress-database.service';
 import { WebhookOutboxService } from './webhook-outbox.service';
 import { WhatsAppIngestionService } from './whatsapp-ingestion.service';
+import { InstagramIngestionService } from './instagram-ingestion.service';
 import { MetaSignatureGuard } from './guards/meta-signature.guard';
 import { Optional } from '@nestjs/common';
 import * as crypto from 'crypto';
@@ -27,7 +28,8 @@ export class WebhooksController {
   constructor(
     private readonly ingressDb: IngressDatabaseService,
     private readonly outboxService: WebhookOutboxService,
-    @Optional() private readonly whatsAppIngestion?: WhatsAppIngestionService
+    @Optional() private readonly whatsAppIngestion?: WhatsAppIngestionService,
+    @Optional() private readonly instagramIngestion?: InstagramIngestionService
   ) {}
 
   /**
@@ -172,9 +174,10 @@ export class WebhooksController {
     const messagingEntries = payload?.entry?.[0]?.messaging || [];
 
     if (messagingEntries.length > 0) {
+      let hasNewMessages = false;
       for (const entry of messagingEntries) {
         const idempotencyKey = entry.message?.mid || `mid_${crypto.randomUUID()}`;
-        const { event } = await this.outboxService.recordEvent(
+        const { event, isDuplicate } = await this.outboxService.recordEvent(
           organizationId,
           channelId,
           'META_INSTAGRAM',
@@ -182,6 +185,14 @@ export class WebhooksController {
           { ...payload, currentMessaging: entry }
         );
         await this.outboxService.markDispatched(organizationId, event.id, event.dispatchToken);
+        if (!isDuplicate) {
+          hasNewMessages = true;
+        }
+      }
+
+      // Ingest into Customer CRM & Conversation thread if new messages and ingestion service available
+      if (hasNewMessages && this.instagramIngestion) {
+        await this.instagramIngestion.ingestInboundMessage(organizationId, channelId, payload);
       }
     } else {
       const idempotencyKey = `ig_${crypto.randomUUID()}`;

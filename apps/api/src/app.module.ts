@@ -32,6 +32,7 @@ import { WebhooksController } from './webhooks/webhooks.controller';
 import { IngressDatabaseService } from './webhooks/ingress-database.service';
 import { WebhookOutboxService } from './webhooks/webhook-outbox.service';
 import { WhatsAppIngestionService } from './webhooks/whatsapp-ingestion.service';
+import { InstagramIngestionService } from './webhooks/instagram-ingestion.service';
 import { MetaSignatureGuard } from './webhooks/guards/meta-signature.guard';
 
 @Module({
@@ -84,6 +85,7 @@ import { MetaSignatureGuard } from './webhooks/guards/meta-signature.guard';
     IngressDatabaseService,
     WebhookOutboxService,
     WhatsAppIngestionService,
+    InstagramIngestionService,
   ],
   exports: [
     PrismaService,
@@ -101,6 +103,7 @@ import { MetaSignatureGuard } from './webhooks/guards/meta-signature.guard';
     IngressDatabaseService,
     WebhookOutboxService,
     WhatsAppIngestionService,
+    InstagramIngestionService,
   ],
 })
 export class AppModule { }

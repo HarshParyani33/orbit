@@ -8,7 +8,12 @@ import {
 import { TenantTransactionRunner } from '../tenancy/tenant-transaction-runner';
 import { RealtimeService } from '../realtime/realtime.service';
 import { AutomationsService } from '../automations/automations.service';
-import { IWhatsAppAdapter, MockWhatsAppAdapter } from '@orbit/integrations';
+import {
+  IWhatsAppAdapter,
+  MockWhatsAppAdapter,
+  IInstagramAdapter,
+  MockInstagramAdapter,
+} from '@orbit/integrations';
 import {
   CreateConversationInput,
   ListConversationsQuery,
@@ -18,6 +23,7 @@ import {
 @Injectable()
 export class ConversationsService {
   private whatsAppAdapter: IWhatsAppAdapter = new MockWhatsAppAdapter();
+  private instagramAdapter: IInstagramAdapter = new MockInstagramAdapter();
 
   constructor(
     @Inject(TenantTransactionRunner)
@@ -36,6 +42,14 @@ export class ConversationsService {
 
   getWhatsAppAdapter(): IWhatsAppAdapter {
     return this.whatsAppAdapter;
+  }
+
+  setInstagramAdapter(adapter: IInstagramAdapter) {
+    this.instagramAdapter = adapter;
+  }
+
+  getInstagramAdapter(): IInstagramAdapter {
+    return this.instagramAdapter;
   }
 
   async listConversations(organizationId: string, query: ListConversationsQuery) {
@@ -305,6 +319,15 @@ export class ConversationsService {
           await this.whatsAppAdapter.sendMessage({
             phoneNumberId: (conversation.channel.config as any)?.phoneNumberId || 'default',
             to: toPhone,
+            text: data.content,
+          });
+        }
+      } else if (data.senderType === 'AGENT' && conversation.channel?.provider === 'META_INSTAGRAM') {
+        const igsid = (conversation.customer?.metadata as any)?.igsid;
+        if (igsid) {
+          await this.instagramAdapter.sendMessage({
+            accountId: (conversation.channel.config as any)?.accountId || 'default',
+            recipientIgsid: igsid,
             text: data.content,
           });
         }
