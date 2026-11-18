@@ -11,6 +11,7 @@ export default defineConfig({
     hookTimeout: 20000,
     globals: true,
     environment: 'node',
+    pool: 'forks',
   },
   resolve: {
     alias: {

@@ -67,7 +67,35 @@ This document records the architectural and engineering decisions for **Mileston
   - **24.3 Navigation Integration:**
     - Extend `Navbar.tsx` with view tabs (`Inbox` and `Channels & Settings`).
     - Extend `App.tsx` to switch seamlessly between `InboxPage` and `DashboardPage`.
-  - **24.4 Verification & Evidence:**
-    - Test Suite: 140/140 tests passing across 12 test files (`tests/integration/inbox-api.spec.ts` 12 integration tests covering master-detail query shapes, channel filtering, status mutations, message sending, and strict cross-tenant isolation).
-    - CI Evidence: GitHub Actions Run `#44276052332` on commit `ffe4903` passed all 17 workflow steps.
-    - Status: VERIFIED.
+
+---
+
+## Decision 25: Real-Time WebSocket Architecture & Tenant Room Isolation (Milestone 2 Slice 2.3)
+- **Status:** APPROVED & IMPLEMENTED
+- **Date:** 2026-11-18
+- **Context:**
+  Slice 2.3 introduces live updates to the agent inbox and conversation threads so agents receive new customer messages, conversation status updates, and new conversation notifications immediately without manual refreshing.
+  Real-time systems in a multi-tenant SaaS present strict isolation challenges: socket connections must never bridge tenant boundaries, unauthorized users must not receive events, and sockets must not snoop on foreign conversation threads.
+- **Architectural Specification & Invariants:**
+  1. **Handshake-Level Authentication & Membership Verification:**
+     - `RealtimeGateway` intercepts handshakes via `server.use(...)` middleware.
+     - Authenticates JWT from `auth.token`, `Authorization: Bearer <token>`, or `access_token` cookie.
+     - Validates that the user has an active `OrganizationMembership` in PostgreSQL for the requested `organizationId`. Connections without valid tokens or with unauthorized org claims are rejected during handshake.
+  2. **Multi-Tenant Room Scoping:**
+     - Upon connection, the socket joins room `tenant:${organizationId}`.
+     - Sockets receive tenant-wide broadcast events: `conversation:created`, `conversation:status_changed`, and `conversation:updated`.
+     - Cross-tenant events are mathematically partitioned by Socket.io room boundaries; sibling tenants receive zero events.
+  3. **Conversation Room Authorization (Snooping Defense):**
+     - Sockets subscribe to conversation rooms (`conv:${conversationId}`) via `@SubscribeMessage('conversation:join')`.
+     - The gateway executes an explicit database check via `TenantTransactionRunner` confirming the conversation exists and belongs to the socket's active tenant. Foreign tenants are rejected with `{ error: 'Conversation not found or unauthorized' }`.
+     - Messages are emitted strictly to authorized participants in `conv:${conversationId}`.
+  4. **Post-Commit Broadcast Invariant:**
+     - In `ConversationsService`, all `realtimeService.emit*` calls occur strictly *after* `tenantRunner.runWithTenant` transactions successfully commit, preventing phantom event delivery on rollback.
+  5. **Client Lifecycle & React Integration:**
+     - `useRealtimeSocket` manages the client-side socket lifecycle, automatic reconnection, and dynamic tenant switching.
+     - Directly invalidates TanStack queries (`['conversations', activeOrgId]` and `['conversation', activeOrgId, conversationId]`) to trigger seamless re-rendering.
+- **Evidence & Verification:**
+  - 12 comprehensive integration tests in `tests/integration/realtime-gateway.spec.ts` covering handshake authentication, forged token rejection, cross-tenant isolation, conversation room authorization, and dynamic switching.
+  - Full test suite: 152/152 tests passing across 13 suites.
+  - Local quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `vite build` (build) exit code 0.
+

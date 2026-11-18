@@ -16,6 +16,7 @@ import { ChannelsService } from './channels/channels.service';
 import { ChannelsController } from './channels/channels.controller';
 import { ConversationsService } from './conversations/conversations.service';
 import { ConversationsController } from './conversations/conversations.controller';
+import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { ConversationsController } from './conversations/conversations.controlle
         };
       },
     }),
+    RealtimeModule,
   ],
   controllers: [
     AuthController,
@@ -61,4 +63,4 @@ import { ConversationsController } from './conversations/conversations.controlle
     ConversationsService,
   ],
 })
-export class AppModule {}
+export class AppModule { }

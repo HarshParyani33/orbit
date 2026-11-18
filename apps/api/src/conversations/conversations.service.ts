@@ -1,10 +1,12 @@
 import {
   Injectable,
   Inject,
+  Optional,
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
 import { TenantTransactionRunner } from '../tenancy/tenant-transaction-runner';
+import { RealtimeService } from '../realtime/realtime.service';
 import {
   CreateConversationInput,
   ListConversationsQuery,
@@ -15,8 +17,11 @@ import {
 export class ConversationsService {
   constructor(
     @Inject(TenantTransactionRunner)
-    private readonly tenantRunner: TenantTransactionRunner
-  ) {}
+    private readonly tenantRunner: TenantTransactionRunner,
+    @Optional()
+    @Inject(RealtimeService)
+    private readonly realtimeService?: RealtimeService
+  ) { }
 
   async listConversations(organizationId: string, query: ListConversationsQuery) {
     return this.tenantRunner.runWithTenant(organizationId, async (tx) => {
@@ -90,7 +95,7 @@ export class ConversationsService {
   }
 
   async createConversation(organizationId: string, data: CreateConversationInput) {
-    return this.tenantRunner.runWithTenant(organizationId, async (tx) => {
+    const result = await this.tenantRunner.runWithTenant(organizationId, async (tx) => {
       // Verify channel exists and belongs to this organization
       const channel = await tx.channel.findFirst({
         where: {
@@ -140,6 +145,9 @@ export class ConversationsService {
         lastMessage: initialMsg,
       };
     });
+
+    this.realtimeService?.emitConversationCreated(organizationId, result);
+    return result;
   }
 
   async updateConversationStatus(
@@ -147,7 +155,7 @@ export class ConversationsService {
     conversationId: string,
     status: 'OPEN' | 'RESOLVED' | 'SNOOZED'
   ) {
-    return this.tenantRunner.runWithTenant(organizationId, async (tx) => {
+    const updated = await this.tenantRunner.runWithTenant(organizationId, async (tx) => {
       const existing = await tx.conversation.findFirst({
         where: { id: conversationId, organizationId },
       });
@@ -178,6 +186,9 @@ export class ConversationsService {
         },
       });
     });
+
+    this.realtimeService?.emitConversationStatusChanged(organizationId, conversationId, status);
+    return updated;
   }
 
   async listMessages(organizationId: string, conversationId: string) {
@@ -205,7 +216,7 @@ export class ConversationsService {
     conversationId: string,
     data: CreateMessageInput
   ) {
-    return this.tenantRunner.runWithTenant(organizationId, async (tx) => {
+    const message = await this.tenantRunner.runWithTenant(organizationId, async (tx) => {
       const conversation = await tx.conversation.findFirst({
         where: { id: conversationId, organizationId },
       });
@@ -244,5 +255,9 @@ export class ConversationsService {
 
       return message;
     });
+
+    this.realtimeService?.emitMessageCreated(organizationId, conversationId, message);
+    return message;
   }
 }
+
