@@ -125,13 +125,13 @@ describe('Project Orbit — Real Multi-Tab Browser Cross-Tab Verification', () =
         await prisma.user.deleteMany({
           where: { email: { contains: 'browser_' } },
         });
-      } catch {}
+      } catch { }
       await prisma.$disconnect();
     }
     if (bundlePath && fs.existsSync(bundlePath)) {
       try {
         fs.unlinkSync(bundlePath);
-      } catch {}
+      } catch { }
     }
   }, 30000);
 

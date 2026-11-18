@@ -144,12 +144,12 @@ export function getStoredSessionCorrelation(): SessionCorrelation | null {
       const val = storage.getItem(STORAGE_KEY_SESSION_CORRELATION);
       if (val) return JSON.parse(val);
     }
-  } catch {}
+  } catch { }
   const memVal = memoryStorage[STORAGE_KEY_SESSION_CORRELATION];
   if (memVal) {
     try {
       return JSON.parse(memVal);
-    } catch {}
+    } catch { }
   }
   return null;
 }
@@ -164,7 +164,7 @@ export function setStoredSessionCorrelation(correlation: SessionCorrelation | nu
         storage.removeItem(STORAGE_KEY_SESSION_CORRELATION);
       }
     }
-  } catch {}
+  } catch { }
   if (correlation) {
     memoryStorage[STORAGE_KEY_SESSION_CORRELATION] = JSON.stringify(correlation);
   } else {
@@ -179,7 +179,7 @@ export function getStoredRefreshCounter(): number {
       const val = storage.getItem(STORAGE_KEY_REFRESH_COUNTER);
       if (val) return parseInt(val, 10) || 0;
     }
-  } catch {}
+  } catch { }
   const memVal = memoryStorage[STORAGE_KEY_REFRESH_COUNTER];
   return memVal ? parseInt(memVal, 10) || 0 : 0;
 }
@@ -191,7 +191,7 @@ export function incrementStoredRefreshCounter(): number {
     if (storage) {
       storage.setItem(STORAGE_KEY_REFRESH_COUNTER, String(next));
     }
-  } catch {}
+  } catch { }
   memoryStorage[STORAGE_KEY_REFRESH_COUNTER] = String(next);
   return next;
 }
@@ -251,7 +251,7 @@ export function markLoggedOut(): void {
   if (broadcastChannel) {
     try {
       broadcastChannel.postMessage({ type: 'ORBIT_LOGOUT', epoch: Date.now() });
-    } catch {}
+    } catch { }
   }
 }
 
@@ -439,7 +439,7 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
       if (broadcastChannel) {
         try {
           broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
-        } catch {}
+        } catch { }
       }
       if (authFailureHandler) {
         authFailureHandler();
