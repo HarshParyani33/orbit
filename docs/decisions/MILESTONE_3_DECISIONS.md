@@ -54,7 +54,7 @@ This document records the architectural and engineering decisions for **Mileston
 
 ## Decision 31: Meta WhatsApp Inbound Webhook Processing & Channel Adapter (Milestone 3 Slice 3.2)
 
-- **Status:** APPROVED & IN IMPLEMENTATION
+- **Status:** APPROVED & VERIFIED
 - **Date:** 2026-11-18
 - **Context:**
   Milestone 3 Slice 3.2 introduces full two-way WhatsApp Business Platform integration to Project Orbit.
@@ -84,10 +84,13 @@ This document records the architectural and engineering decisions for **Mileston
      - In `ConversationsService.createMessage`: if `senderType === 'AGENT'` and channel is `META_WHATSAPP`, invokes adapter and stores `metadata: { externalId, status: 'DISPATCHED' }`.
 
 - **Evidence & Verification:**
-  - Automated integration tests covering:
+  - Automated integration tests in `tests/integration/whatsapp-channel.spec.ts` covering:
     - Inbound WhatsApp message parsing, customer identity creation, and thread creation.
     - Customer thread continuity: multiple messages from the same phone number append to the same thread.
     - Re-opening snoozed conversations on customer reply.
     - Automation engine trigger and real-time event dispatch.
     - Outbound agent message dispatch via WhatsApp adapter.
     - Idempotent deduplication when identical webhook is re-delivered.
+  - Full test suite: 220/220 tests passing across all 19 suites.
+  - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
+  - **GitHub Actions CI Verification:** [CI Run #44324562676](https://github.com/HarshParyani33/orbit/actions/runs/44324562676) completed with conclusion `success` across all 17 pipeline steps.
