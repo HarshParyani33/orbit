@@ -6,8 +6,7 @@
 **Milestone:** `Milestone 1 — Foundation, Multi-Tenant Security, Authentication & Minimal Dashboard`  
 **Governance:** `Gravitas Core Skill Mode (6 Invariants Strictly Enforced)`  
 **Repository:** `HarshParyani33/orbit`  
-**Verification Baseline:** `74 / 74 Passing Tests (36 Real DB Integration + 8 Real HTTP Network Integration + 30 Unit Tests)`
-**Verification Baseline:** `90 / 90 Passing Tests (36 Real DB Integration + 10 Real HTTP Network Integration + 44 Unit Tests)`
+**Verification Baseline:** `94 / 94 Passing Tests (36 Real DB Integration + 13 Real HTTP Network Integration + 6 Simulated Browser Context Tests + 39 Unit Tests)`
 
 ---
 

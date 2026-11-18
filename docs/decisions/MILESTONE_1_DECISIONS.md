@@ -177,6 +177,18 @@ Diagnostic execution of `python .agents/skills/gravitas/scripts/doctor.py` confi
   - Update `.env.example` to use unmistakable `CHANGE_ME_` placeholders for all database connection strings and role passwords, with clear developer instructions on generating unique secrets.
   - Ensure real `.env` files remain strictly ignored by Git.
 
+### Decision 18: Milestone 1 Autonomous Correction Loop & Final Security Hardening
+- **Context:** Review identified four critical residual issues requiring architectural closure:
+  1. **API Bootstrap Double Listen Bug:** In `apps/api/src/main.ts`, `app.listen()` was called twice (first with `process.env.PORT || 4000`, then with `config.PORT`). This bypassed validated configuration and risked port collision or unhandled promise rejection.
+  2. **Cross-Tab Web Lock Fallback Vulnerability:** In `apps/web/src/api/client.ts`, if lock acquisition failed or timed out, the catch block fell back to `executeSingleFlightRefresh()`, completely bypassing cross-tab mutual exclusion and risking concurrent token rotation and session family theft revocation.
+  3. **Database Role Provisioning Password Sanitization:** In `docker/postgres/init-roles.sql`, role creation blocks contained residual hardcoded passwords in `CREATE ROLE` statements, conflicting with dynamic `ALTER ROLE ... WITH PASSWORD :'var'` statements.
+  4. **Milestone 1 Documentation Consolidation:** Documentation across review files contained duplicated lines and ambiguous test classifications.
+- **Decision:**
+  - **18.1 API Single Listen & Single Port Authority:** `apps/api/src/main.ts` enforces `config.PORT` from `@orbit/config` as the sole authoritative port source. `app.listen(config.PORT)` is invoked exactly once. Factor out `createApp()` to enable automated integration testing of application initialization.
+  - **18.2 Cross-Tab Refresh Fail-Closed Mutual Exclusion:** In `apps/web/src/api/client.ts`, eliminate the uncoordinated refresh fallback. If lock acquisition fails or times out, inspect if another tab completed refresh (`storedRefresh > dispatchEpoch` or `Date.now() - storedRefresh < 1500`). If so, reuse the freshly rotated cookie. If not, fail closed safely (`setStoredRefreshStatus('failed')`, notify `authFailureHandler()`, and return `false`). Never dispatch an uncoordinated refresh request that bypasses the mutex.
+  - **18.3 Role Provisioning Sanitization:** In `docker/postgres/init-roles.sql`, create roles without hardcoded initial passwords (`CREATE ROLE ... WITH LOGIN NOSUPERUSER ...`), and dynamically assign passwords via `ALTER ROLE ... WITH PASSWORD :'var'` using psql `\getenv` and SQL literal interpolation.
+  - **18.4 Document Consolidation & Test Taxonomy:** Reconcile all Milestone 1 review artifacts into one authoritative document with a single ID, clean headings, a unified findings table, and precise test classifications distinguishing Real Database Integration Tests, Real HTTP TCP Integration Tests, Simulated Execution Context Tests, and Unit Tests.
+
 ---
 
 ## 3. Staged Implementation Plan

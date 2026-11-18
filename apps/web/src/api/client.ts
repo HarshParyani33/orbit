@@ -227,9 +227,32 @@ export async function requestTokenRefresh(dispatchEpoch?: number): Promise<boole
           );
         } catch {
           clearTimeout(timeoutId);
-          // If lock acquisition timed out or failed (e.g. unresponsive lock holder),
-          // fall back to single-flight direct refresh
-          return await executeSingleFlightRefresh();
+          // If lock acquisition timed out or failed (e.g. aborted or unresponsive lock holder),
+          // DO NOT execute an uncoordinated direct refresh, as doing so bypasses mutual exclusion
+          // and risks concurrent token rotation and session family theft revocation.
+          // First, check whether another tab successfully completed refresh in the interim:
+          const storedRefresh = getStoredRefreshEpoch();
+          if (dispatchEpoch && storedRefresh > dispatchEpoch) {
+            lastSuccessfulRefreshTime = performance.now();
+            return true;
+          }
+
+          if (storedRefresh > 0 && Date.now() - storedRefresh < 1500) {
+            lastSuccessfulRefreshTime = performance.now();
+            return true;
+          }
+
+          // If no sibling tab completed a valid refresh, fail closed safely.
+          setStoredRefreshStatus('failed');
+          if (broadcastChannel) {
+            try {
+              broadcastChannel.postMessage({ type: 'ORBIT_REFRESH_FAILED', epoch: Date.now() });
+            } catch {}
+          }
+          if (authFailureHandler) {
+            authFailureHandler();
+          }
+          return false;
         }
       }
 

@@ -1,16 +1,15 @@
 # PROJECT ORBIT — MILESTONE 1 IMPLEMENTATION REPORT
 ## Foundation, Multi-Tenant Security, Authentication & Minimal Dashboard
 
-**Report Version:** `1.3.0`  
-**Report Version:** `1.4.0`  
+**Report Version:** `1.5.0`  
 **Milestone:** `Milestone 1 — Foundation, Multi-Tenant Security, Authentication & Minimal Dashboard`  
-**Execution Date:** `2026-11-08`  
+**Execution Date:** `2026-11-18`  
 **Architectural Contract:** `docs/ARCHITECTURE.md` v1.1.5  
 **Decisions Document:** `docs/decisions/MILESTONE_1_DECISIONS.md`  
 **Security Review Document:** `docs/MILESTONE_1_SECURITY_REVIEW.md`  
+**Final Review Document:** `docs/MILESTONE_1_FINAL_REVIEW.md`  
 **Governance Runtime:** `Gravitas Core Skill Mode (6 Invariants Enforced)`  
-**Implementation Verdict:** **SUCCESS — ALL GATES & VERIFICATION SUITES PASSED (74/74 TESTS)**
-**Implementation Verdict:** **SUCCESS — ALL GATES & VERIFICATION SUITES PASSED (90/90 TESTS)**
+**Implementation Verdict:** **SUCCESS — ALL GATES & VERIFICATION SUITES PASSED (94/94 TESTS)**
 
 ---
 
@@ -24,13 +23,10 @@ The delivered system establishes:
 3. **PostgreSQL Security & Database Roles:** Strict separation across `orbit_migrator` (DDL owner, `NOSUPERUSER, BYPASSRLS`), `orbit_app` (runtime application, `NOSUPERUSER, NOBYPASSRLS`), and `orbit_ingress` (pre-tenant routing, `NOSUPERUSER, ZERO Table Access`).
 4. **Categorized Explicit Grants (Zero Blanket Default DML):** Table privileges strictly partitioned into Categories A (tenant tables), B (read-only pricing catalogs), C (zero-table-access routing lookups), and D (application-guarded identity tables).
 5. **Interactive Tenant Isolation:** `TenantTransactionRunner` executing interactive PostgreSQL transactions with `SET LOCAL app.current_org_id` via parameterized `$queryRaw`, guarded by `FORCE ROW LEVEL SECURITY`.
-6. **Robust Authentication Foundation:** Argon2id password hashing, HTTP-only secure cookies, short-lived JWT access tokens, rotated refresh tokens with `FOR UPDATE` row locking, and automatic theft/reuse detection that immediately revokes compromised session families.
 6. **Robust Authentication Foundation:** Argon2id password hashing, HTTP-only secure cookies, short-lived JWT access tokens with validated startup enforcement, rotated refresh tokens with `FOR UPDATE` row locking, and automatic theft/reuse detection that immediately revokes compromised session families.
 7. **Organization Membership & Tenant Authorization:** `TenantGuard` verifying active workspace memberships and route parameter alignment on every tenant-scoped operation.
-8. **Minimal Authenticated Dashboard:** React 18+ Vite SPA with Tailwind CSS, React Hook Form, and TanStack Query featuring login, registration, workspace switching, live channel management, and single-flight refresh concurrency deduplication.
-9. **Comprehensive Verification Suite:** 74 automated tests (36 real PostgreSQL integration tests, 8 real HTTP CORS/CSRF TCP integration tests, and 30 unit tests) proving complete system correctness and multi-tenant security boundaries.
-8. **Minimal Authenticated Dashboard:** React 18+ Vite SPA with Tailwind CSS, React Hook Form, and TanStack Query featuring login, registration, workspace switching, live channel management, and cross-tab Web Locks single-flight refresh coordination.
-9. **Comprehensive Verification Suite:** 90 automated tests (36 real PostgreSQL integration tests, 10 real HTTP CORS/CSRF TCP integration tests, and 44 unit tests) proving complete system correctness and multi-tenant security boundaries.
+8. **Minimal Authenticated Dashboard:** React 18+ Vite SPA with Tailwind CSS, React Hook Form, and TanStack Query featuring login, registration, workspace switching, live channel management, and cross-tab Web Locks single-flight refresh coordination with fail-closed mutual exclusion.
+9. **Comprehensive Verification Suite:** 94 automated tests (36 real PostgreSQL integration tests, 13 real HTTP CORS/CSRF/Bootstrap TCP integration tests, 6 simulated browser execution context tests, and 39 unit tests) proving complete system correctness and multi-tenant security boundaries.
 
 ---
 
@@ -249,8 +245,8 @@ $ npm test
    - Database role invitation checks (OWNER vs ADMIN authority): **PASS**
    - Suspended organization database state fails closed: **PASS**
 
-##### Category 3: Real HTTP CORS & CSRF Pipeline Network Integration Tests (8 tests over TCP socket)
-5. `tests/integration/http-cors-csrf.spec.ts` (8 tests):
+##### Category 3: Real HTTP CORS, CSRF & Bootstrap Network Integration Tests (13 tests over TCP socket)
+5. `tests/integration/http-cors-csrf.spec.ts` (10 tests):
    - Preflight OPTIONS from allowed origin (`http://localhost:5173`) returns 204 with `Access-Control-Allow-Origin`, `Access-Control-Allow-Credentials: true`, and `Access-Control-Allow-Headers` containing `X-Requested-With`: **PASS**
    - Preflight OPTIONS from untrusted origin (`http://malicious-site.com`) blocks origin header: **PASS**
    - POST request with cookies and `Sec-Fetch-Site: cross-site` is rejected with HTTP 403 Forbidden: **PASS**
@@ -259,9 +255,16 @@ $ npm test
    - POST request with cookies and `X-Requested-With: XMLHttpRequest` passes CSRF guard: **PASS**
    - POST request with cookies and `X-CSRF-Token` passes CSRF guard: **PASS**
    - Programmatic Bearer token request is exempt from cookie CSRF checks: **PASS**
+   - Cookie mutation with `X-Requested-With` and NO Origin/Referer passes: **PASS**
+   - Cookie mutation with `X-CSRF-Token` and NO Origin/Referer passes: **PASS**
 
-##### Category 4: Application Guard, Config & Security Unit Tests (24 tests with Mocked ExecutionContext)
-6. `tests/integration/security-pass.spec.ts` Guard Subset (24 tests):
+6. `tests/integration/bootstrap.spec.ts` (3 tests):
+   - `createApp()` creates and configures NestJS application without binding sockets: **PASS**
+   - `bootstrap()` invokes `app.listen()` exactly once using `config.PORT` as authoritative source: **PASS**
+   - Fail-fast configuration invariant throws before server creation if config is invalid: **PASS**
+
+##### Category 4: Application Guard, Config & Security Unit Tests (25 tests with Mocked ExecutionContext)
+7. `tests/integration/security-pass.spec.ts` Guard Subset (25 tests):
    - Route-level IDOR prevention (User A blocked from Org B): **PASS**
    - Mismatched header vs route param rejected: **PASS**
    - Aligned route and verified tenant context authorized: **PASS**
@@ -284,17 +287,36 @@ $ npm test
    - Docker Compose binds Redis to 127.0.0.1: **PASS**
    - Docker Compose requires `POSTGRES_PASSWORD` with no default fallback: **PASS**
    - `.env.example` provides safe superuser template with random secret placeholder: **PASS**
+   - `init-roles.sql` boundary and sanitize checks: **PASS**
    - Role invitation boundaries (regular member cannot invite, admin cannot grant owner): **PASS**
    - Admin cannot create another admin (owner-only): **PASS**
 
-##### Category 5: Client-Side Single-Flight Refresh Concurrency Unit Tests (6 tests)
-7. `tests/unit/client-refresh.spec.ts` (6 tests):
+##### Category 5: Client-Side Concurrency & Configuration Unit Tests (20 tests)
+8. `tests/unit/client-refresh.spec.ts` (6 tests):
    - Single call to `requestTokenRefresh` calls `/api/auth/refresh` and returns true on 200: **PASS**
    - Concurrent calls to `requestTokenRefresh` share the exact same promise (single-flight deduplication): **PASS**
    - Simultaneous `apiRequest` calls receiving 401 trigger exactly ONE refresh and retry successfully: **PASS**
    - Failed refresh clears session via `authFailureHandler` without replaying consumed tokens: **PASS**
    - Auth endpoints (`/api/auth/login`) do not trigger auto-refresh on 401: **PASS**
    - In-flight request receiving 401 after refresh completion retries immediately without duplicate refresh: **PASS**
+
+9. `tests/unit/cross-tab-refresh.spec.ts` (6 tests — Simulated Execution Contexts):
+   - Concurrent tabs Web Locks serialization (exactly one network refresh): **PASS**
+   - Cross-tab stale 401 interception via storage epoch without redundant refresh: **PASS**
+   - Refresh failure propagates to waiting contexts and triggers `authFailureHandler`: **PASS**
+   - Aborted/unresponsive lock holder fails closed safely without uncoordinated refresh: **PASS**
+   - Aborted lock holder reuses session if sibling tab refreshed in interim: **PASS**
+   - Security contract: zero sensitive tokens or credentials disclosed in storage: **PASS**
+
+10. `tests/unit/config-jwt.spec.ts` (8 tests):
+   - Production startup fails when `JWT_SECRET` is missing: **PASS**
+   - Production startup fails when `JWT_SECRET` is weak (< 32 chars): **PASS**
+   - Production startup fails when `JWT_SECRET` matches dev defaults: **PASS**
+   - Production startup fails when `COOKIE_SECRET` is missing or weak: **PASS**
+   - Valid production configuration passes: **PASS**
+   - Development mode allows explicit dev defaults: **PASS**
+   - TokenService signing and verification parity: **PASS**
+   - Error messages never disclose secret values: **PASS**
 
 ### 8.2 Monorepo Production Build Execution
 ```bash

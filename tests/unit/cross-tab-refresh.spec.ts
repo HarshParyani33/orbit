@@ -1,3 +1,12 @@
+/**
+ * Cross-Tab Refresh Token Coordination Tests
+ *
+ * [Gravitas Invariant 6 — Testing Environment Classification]
+ * These tests execute in Vitest under simulated execution contexts and Web Locks API mocks/spies.
+ * They deterministically verify the serialization, stale 401 interception, fail-closed mutual
+ * exclusion, and token theft defense invariants. They do not run in a live multi-process browser
+ * harness (such as Playwright, which is not installed in the repository).
+ */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   apiRequest,
@@ -132,8 +141,12 @@ describe('Cross-Tab Refresh Token Coordination Tests', () => {
     expect(failureHandledCount).toBeGreaterThan(0);
   });
 
-  it('4. unresponsive or aborted lock holder falls back safely to direct refresh without hanging', async () => {
+  it('4. unresponsive or aborted lock holder fails closed safely without uncoordinated direct refresh', async () => {
     let refreshExecuted = false;
+    let authFailureCalled = false;
+    setAuthFailureHandler(() => {
+      authFailureCalled = true;
+    });
 
     // Simulate an aborted or failing lock environment via spy
     const lockSpy = vi
@@ -154,8 +167,45 @@ describe('Cross-Tab Refresh Token Coordination Tests', () => {
 
     try {
       const result = await requestTokenRefresh();
+      // Must FAIL CLOSED: do not bypass mutex by executing an uncoordinated refresh
+      expect(result).toBe(false);
+      expect(refreshExecuted).toBe(false);
+      expect(authFailureCalled).toBe(true);
+    } finally {
+      lockSpy.mockRestore();
+    }
+  });
+
+  it('4b. aborted lock holder reuses rotated session if sibling tab refreshed in the interim', async () => {
+    let refreshExecuted = false;
+
+    // Simulate sibling tab having completed refresh 100ms ago
+    const siblingRefreshEpoch = Date.now() - 100;
+    setStoredRefreshEpoch(siblingRefreshEpoch);
+
+    const lockSpy = vi
+      .spyOn(navigator.locks, 'request')
+      .mockRejectedValue(new DOMException('The lock request timed out', 'TimeoutError'));
+
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url === '/api/auth/refresh') {
+        refreshExecuted = true;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true }),
+        };
+      }
+      return { ok: false, status: 404 };
+    });
+
+    try {
+      // Dispatch time was 200ms ago (before sibling refreshed 100ms ago)
+      const dispatchEpoch = Date.now() - 200;
+      const result = await requestTokenRefresh(dispatchEpoch);
+      // Safely reuses the freshly rotated cookie without dispatching uncoordinated refresh
       expect(result).toBe(true);
-      expect(refreshExecuted).toBe(true);
+      expect(refreshExecuted).toBe(false);
     } finally {
       lockSpy.mockRestore();
     }

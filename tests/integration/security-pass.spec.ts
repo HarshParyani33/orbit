@@ -486,12 +486,18 @@ describe('Milestone 1 — Comprehensive Security Correction Suite', () => {
       expect(envExample).toContain('INGRESS_DATABASE_URL=postgresql://orbit_ingress:CHANGE_ME_ORBIT_INGRESS_PASSWORD');
     });
 
-    it('verifies init-roles.sql declares local-development-only boundary and supports environment overrides', () => {
+    it('verifies init-roles.sql declares local-development-only boundary, supports environment overrides, and avoids hardcoded passwords in role creation', () => {
       const initRolesSql = fs.readFileSync(path.resolve(process.cwd(), 'docker/postgres/init-roles.sql'), 'utf-8');
       expect(initRolesSql).toMatch(/SECURITY BOUNDARY NOTICE.*LOCAL DEVELOPMENT & CI ONLY/i);
       expect(initRolesSql).toContain('\\getenv env_app_pass ORBIT_APP_PASSWORD');
       expect(initRolesSql).toContain('\\getenv env_migrator_pass ORBIT_MIGRATOR_PASSWORD');
       expect(initRolesSql).toContain('\\getenv env_ingress_pass ORBIT_INGRESS_PASSWORD');
+      // Invariant: CREATE ROLE blocks do not contain hardcoded PASSWORD statements
+      expect(initRolesSql).not.toMatch(/CREATE ROLE [a-z_]+ WITH[^;]*PASSWORD/i);
+      // Invariant: Passwords set via safe literal interpolation
+      expect(initRolesSql).toContain("ALTER ROLE orbit_migrator WITH PASSWORD :'env_migrator_pass';");
+      expect(initRolesSql).toContain("ALTER ROLE orbit_app WITH PASSWORD :'env_app_pass';");
+      expect(initRolesSql).toContain("ALTER ROLE orbit_ingress WITH PASSWORD :'env_ingress_pass';");
     });
   });
 
