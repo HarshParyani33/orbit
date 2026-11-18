@@ -6,7 +6,7 @@ This document records the architectural and engineering decisions for **Mileston
 
 ## Decision 30: Webhook Ingress Architecture, Narrow Routing Lookup & Transactional Outbox (Milestone 3 Slice 3.1)
 
-- **Status:** APPROVED & IN IMPLEMENTATION
+- **Status:** APPROVED & VERIFIED
 - **Date:** 2026-11-18
 - **Context:**
   Milestone 3 opens Project Orbit to external third-party communication channels (Meta WhatsApp Cloud API, Meta Instagram Messaging API, and Stripe Billing).
@@ -46,3 +46,6 @@ This document records the architectural and engineering decisions for **Mileston
     - Narrow routing lookup via `resolve_channel_routing` (known account routes to tenant, unknown returns 404).
     - Outbox idempotent insertion (duplicate `idempotency_key` does not duplicate event).
     - Multi-tenant isolation (RLS prevents cross-tenant event access).
+  - Full test suite: 214/214 tests passing across all 18 suites.
+  - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
+  - **GitHub Actions CI Verification:** [CI Run #44322394554](https://github.com/HarshParyani33/orbit/actions/runs/44322394554) completed with conclusion `success` across all 17 pipeline steps.
