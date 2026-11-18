@@ -173,7 +173,7 @@ This document records the architectural and engineering decisions for **Mileston
 ---
 
 ## Decision 28: Website Chat Widget Architecture, Ingress Security & Visitor Capability Separation (Milestone 2 Slice 2.6)
-- **Status:** APPROVED & IN IMPLEMENTATION
+- **Status:** APPROVED & VERIFIED
 - **Date:** 2026-11-18
 - **Context:**
   Milestone 2 Slice 2.6 introduces the Website Chat Widget to Project Orbit, allowing businesses to embed an omnichannel customer chat interface on their websites.
