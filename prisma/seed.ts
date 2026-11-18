@@ -41,6 +41,28 @@ async function main() {
   });
   console.log('[Seed] Pricing schedule created:', gpt4oMini.canonicalModel);
 
+  const mockPricing = await prisma.aiModelPricingSchedule.upsert({
+    where: {
+      uq_pricing_provider_model_version: {
+        provider: 'MOCK',
+        canonicalModel: 'gpt-4o-mini',
+        pricingVersion: '2024-07-18-v1',
+      },
+    },
+    update: {},
+    create: {
+      provider: 'MOCK',
+      canonicalModel: 'gpt-4o-mini',
+      modelAlias: 'mock-gpt-4o-mini',
+      pricingVersion: '2024-07-18-v1',
+      promptTokenRatePerM: 0.15,
+      completionTokenRatePerM: 0.60,
+      currency: 'USD',
+      effectiveFrom: new Date('2024-07-18T00:00:00Z'),
+    },
+  });
+  console.log('[Seed] Pricing schedule created for MOCK:', mockPricing.canonicalModel);
+
   // 2. Seed Users
   const userAcmeOwner = await prisma.user.upsert({
     where: { email: 'owner@acme.com' },

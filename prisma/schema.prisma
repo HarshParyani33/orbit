@@ -52,8 +52,9 @@ model Organization {
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
 
-  memberships OrganizationMembership[]
-  channels    Channel[]
+  memberships      OrganizationMembership[]
+  channels         Channel[]
+  aiConfigurations AiConfiguration[]
 
   @@map("organizations")
 }
@@ -235,4 +236,85 @@ model AiModelPricingSchedule {
   @@unique([provider, canonicalModel, pricingVersion], name: "uq_pricing_provider_model_version")
   @@index([provider, canonicalModel, effectiveFrom, effectiveTo])
   @@map("ai_model_pricing_schedules")
+}
+
+// ==============================================================================
+// 4. TENANT-DOMAIN AI ASSISTANT & COST TRACKING MODELS (Category A — RLS)
+// ==============================================================================
+
+model AiConfiguration {
+  id                 String    @id @default(uuid()) @db.Uuid
+  organizationId     String    @map("organization_id") @db.Uuid
+  name               String    @db.VarChar(128)
+  systemInstructions String    @map("system_instructions") @db.Text
+  policyRules        Json      @default("[]") @map("policy_rules")
+  provider           String    @default("MOCK") @db.VarChar(32) // MOCK, OPENAI, ANTHROPIC
+  model              String    @default("gpt-4o-mini") @db.VarChar(64)
+  temperature        Decimal   @default(0.3) @db.Decimal(3, 2)
+  status             String    @default("DRAFT") @db.VarChar(24) // DRAFT, ACTIVE, ARCHIVED
+  version            Int       @default(1)
+  approvedAt         DateTime? @map("approved_at") @db.Timestamptz()
+  approvedByUserId   String?   @map("approved_by_user_id") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@unique([id, organizationId], name: "uq_ai_configs_id_org")
+  @@index([organizationId, status])
+  @@map("ai_configurations")
+}
+
+model AiRequest {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  idempotencyKey String   @map("idempotency_key") @db.VarChar(255)
+  status         String   @default("PENDING") @db.VarChar(24) // PENDING, COMPLETED, FAILED, BYPASSED
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  attempts   AiRequestAttempt[]
+  usageEvent AiUsageEvent?
+
+  @@unique([id, organizationId], name: "uq_ai_requests_id_org")
+  @@unique([organizationId, idempotencyKey], name: "uq_ai_requests_org_idempotency")
+  @@index([organizationId, conversationId])
+  @@map("ai_requests")
+}
+
+model AiRequestAttempt {
+  id                       String   @id @default(uuid()) @db.Uuid
+  organizationId           String   @map("organization_id") @db.Uuid
+  requestId                String   @map("request_id") @db.Uuid
+  provider                 String   @db.VarChar(32)
+  model                    String   @db.VarChar(64)
+  promptTokens             Int      @default(0) @map("prompt_tokens")
+  completionTokens         Int      @default(0) @map("completion_tokens")
+  incurredCostUsd          Decimal? @map("incurred_cost_usd") @db.Decimal(10, 6)
+  costReconciliationStatus String   @default("PENDING") @map("cost_reconciliation_status") @db.VarChar(24) // PENDING, KNOWN, ESTIMATED, UNKNOWN
+  isTenantBillable         Boolean  @default(false) @map("is_tenant_billable")
+  status                   String   @default("PENDING") @db.VarChar(24) // PENDING, SUCCESS, TIMEOUT, ERROR
+  createdAt                DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  request AiRequest @relation(fields: [requestId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId], name: "uq_ai_request_attempts_id_org")
+  @@index([organizationId, requestId])
+  @@map("ai_request_attempts")
+}
+
+model AiUsageEvent {
+  id                String   @id @default(uuid()) @db.Uuid
+  organizationId    String   @map("organization_id") @db.Uuid
+  requestId         String   @unique @map("request_id") @db.Uuid
+  totalTokens       Int      @map("total_tokens")
+  billableAmountUsd Decimal  @map("billable_amount_usd") @db.Decimal(10, 6)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  request AiRequest @relation(fields: [requestId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([requestId, organizationId], name: "uq_ai_usage_request_org")
+  @@unique([id, organizationId], name: "uq_ai_usage_events_id_org")
+  @@index([organizationId, createdAt])
+  @@map("ai_usage_events")
 }

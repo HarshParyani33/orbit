@@ -17,6 +17,7 @@
     "@nestjs/platform-socket.io": "^10.4.22",
     "@nestjs/websockets": "^10.4.22",
     "@orbit/config": "*",
+    "@orbit/integrations": "*",
     "@orbit/shared": "*",
     "@orbit/validation": "*",
     "@prisma/client": "^5.22.0",

@@ -137,6 +137,39 @@ This document records the architectural and engineering decisions for **Mileston
   - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `vite build` (build) exit code 0.
   - **GitHub Actions CI Verification:** [CI Run #44297005128](https://github.com/HarshParyani33/orbit/actions/runs/44297005128) completed with conclusion `success` across all 17 pipeline steps.
 
+---
+
+## Decision 27: AI Assistant Architecture, Guardrails & Cost Tracking (Milestone 2 Slice 2.5)
+- **Status:** APPROVED & IMPLEMENTED
+- **Date:** 2026-11-18
+- **Context:**
+  Milestone 2 Slice 2.5 introduces safe, tenant-specific AI customer assistance to Project Orbit.
+  The architecture must satisfy strict multi-tenant boundaries, robust prompt-injection defenses, explicit instruction governance (Draft -> Test -> Approve -> Activate), and separated cost accounting (Platform COGS vs. Customer Turn Billing) conforming to `docs/ARCHITECTURE.md` Section 8.
+- **Architectural Specifications & Invariants:**
+  1. **Provider Abstraction (`@orbit/integrations`):**
+     - Contract `IAiProvider` decoupling the core platform from model vendors.
+     - Implementations: `MockAiProvider` (deterministic, latency-simulated for tests) and `OpenAiProvider` (standard Chat Completions).
+  2. **Tenant Configuration Governance & Precedence:**
+     - Invariant: **Do not silently modify approved instructions.**
+     - Instruction lifecycle: `DRAFT` -> `APPROVED` -> `ACTIVE`. Only an authorized workspace user (OWNER or ADMIN) can approve and activate instructions.
+     - Versioned records (`version` integer) preserve historical configuration integrity.
+  3. **Prompt Injection & Framing Defense:**
+     - User-supplied customer messages are encapsulated within strict `<customer_message>` XML delimiters.
+     - System prompt establishes explicit precedence: approved tenant instructions and safety rules override all instructions supplied inside user message bodies.
+  4. **Cost & Token Accounting Separation (Section 8.1):**
+     - `ai_requests`: Logical customer turns (idempotent, tenant-scoped).
+     - `ai_request_attempts`: Physical provider calls recording platform COGS liabilities (`incurred_cost_usd`, `cost_reconciliation_status: KNOWN | ESTIMATED | UNKNOWN`).
+     - `ai_usage_events`: Exactly-once billable customer turns (`UNIQUE(request_id)`).
+     - Rates resolved dynamically from `ai_model_pricing_schedules`. If pricing schedule is missing, fails closed with pre-flight error.
+  5. **Human Takeover Protocol:**
+     - If an agent has replied or conversation status is `SNOOZED` / `RESOLVED`, AI suggestions/auto-replies gracefully abstain with reason `HUMAN_TAKEOVER`.
+- **Evidence & Verification:**
+  - Database Migration: `20261118000001_ai_assistant` created `ai_configurations`, `ai_requests`, `ai_request_attempts`, and `ai_usage_events` with forced Row Level Security (RLS) and `orbit_app` least-privilege grants.
+  - 10 comprehensive integration tests in `tests/integration/ai-assistant.spec.ts` covering non-destructive versioning, approval workflows, tenant isolation, COGS liability vs. usage event accounting, prompt injection framing defense, human takeover protocol, and unpriced model fail-closed handling.
+  - Full test suite: 175/175 tests passing across all 15 suites.
+  - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `vite build` (build) exit code 0.
+
+
 
 
 

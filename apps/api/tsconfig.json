@@ -8,7 +8,8 @@
   "references": [
     { "path": "../../packages/shared" },
     { "path": "../../packages/validation" },
-    { "path": "../../packages/config" }
+    { "path": "../../packages/config" },
+    { "path": "../../packages/integrations" }
   ],
   "include": ["src/**/*"]
 }

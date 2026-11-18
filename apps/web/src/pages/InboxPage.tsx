@@ -33,6 +33,7 @@ export const InboxPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [replyContent, setReplyContent] = useState('');
   const [isProfilePaneOpen, setIsProfilePaneOpen] = useState(true);
+  const [aiNotice, setAiNotice] = useState<string | null>(null);
   const [isNewConvModalOpen, setIsNewConvModalOpen] = useState(false);
   const [newConvChannelId, setNewConvChannelId] = useState('');
   const [newConvTitle, setNewConvTitle] = useState('');
@@ -92,6 +93,29 @@ export const InboxPage: React.FC = () => {
       setReplyContent('');
       queryClient.invalidateQueries({ queryKey: ['conversation', activeOrg?.id, selectedConvId] });
       queryClient.invalidateQueries({ queryKey: ['conversations', activeOrg?.id] });
+    },
+  });
+
+  // AI Suggestion Mutation
+  const aiSuggestionMutation = useMutation({
+    mutationFn: () =>
+      apiRequest<{ bypassed: boolean; reason?: string; message?: string; suggestion?: string }>(
+        `/api/ai/conversations/${selectedConvId}/suggest`,
+        { method: 'POST' }
+      ),
+    onSuccess: (data) => {
+      if (data.bypassed) {
+        setAiNotice(data.message || 'AI generation skipped due to human takeover.');
+        setTimeout(() => setAiNotice(null), 4000);
+      } else if (data.suggestion) {
+        setReplyContent(data.suggestion);
+        setAiNotice('AI suggestion drafted! Review and edit before sending.');
+        setTimeout(() => setAiNotice(null), 4000);
+      }
+    },
+    onError: (err: any) => {
+      setAiNotice(err?.message || 'Failed to generate AI suggestion.');
+      setTimeout(() => setAiNotice(null), 4000);
     },
   });
 
@@ -544,16 +568,32 @@ export const InboxPage: React.FC = () => {
                     <div className="flex items-center space-x-2 text-xs text-slate-400">
                       <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
                       <span>Replying as agent to {activeConversation.channel?.name}</span>
+                      {aiNotice && (
+                        <span className="text-indigo-600 font-medium ml-2">{aiNotice}</span>
+                      )}
                     </div>
 
-                    <button
-                      type="submit"
-                      disabled={!replyContent.trim() || sendMessageMutation.isPending}
-                      className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                      <span>{sendMessageMutation.isPending ? 'Sending...' : 'Send Reply'}</span>
-                    </button>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => aiSuggestionMutation.mutate()}
+                        disabled={aiSuggestionMutation.isPending || sendMessageMutation.isPending}
+                        className="inline-flex items-center space-x-1.5 px-3 py-2 text-xs font-semibold text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-lg shadow-2xs transition-colors disabled:opacity-50"
+                        title="Draft grounded response using tenant-approved AI instructions"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                        <span>{aiSuggestionMutation.isPending ? 'Drafting...' : 'AI Assist'}</span>
+                      </button>
+
+                      <button
+                        type="submit"
+                        disabled={!replyContent.trim() || sendMessageMutation.isPending}
+                        className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>{sendMessageMutation.isPending ? 'Sending...' : 'Send Reply'}</span>
+                      </button>
+                    </div>
                   </div>
                 </form>
               </div>

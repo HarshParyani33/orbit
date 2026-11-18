@@ -115,6 +115,20 @@ export const mergeCustomersSchema = z.object({
   reason: z.string().min(3, 'Reason must be at least 3 characters').max(255).trim(),
 });
 
+// AI Configuration & Suggestion Schemas
+export const createAiConfigSchema = z.object({
+  name: z.string().min(2, 'Name must be at least 2 characters').max(128).trim(),
+  systemInstructions: z.string().min(10, 'Instructions must be at least 10 characters').max(10000).trim(),
+  policyRules: z.array(z.string().min(1).max(500)).default([]),
+  provider: z.enum(['MOCK', 'OPENAI', 'ANTHROPIC']).default('MOCK'),
+  model: z.string().min(1).max(64).default('gpt-4o-mini'),
+  temperature: z.number().min(0).max(1).default(0.3),
+});
+
+export const generateAiSuggestionSchema = z.object({
+  conversationId: z.string().uuid('Invalid conversation ID'),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type CreateOrganizationInput = z.infer<typeof createOrganizationSchema>;
@@ -131,3 +145,5 @@ export type UpdateCustomerInput = z.infer<typeof updateCustomerSchema>;
 export type ListCustomersQuery = z.infer<typeof listCustomersQuerySchema>;
 export type LinkChannelIdentityInput = z.infer<typeof linkChannelIdentitySchema>;
 export type MergeCustomersInput = z.infer<typeof mergeCustomersSchema>;
+export type CreateAiConfigInput = z.infer<typeof createAiConfigSchema>;
+export type GenerateAiSuggestionInput = z.infer<typeof generateAiSuggestionSchema>;

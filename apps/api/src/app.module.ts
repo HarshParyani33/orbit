@@ -18,6 +18,8 @@ import { ConversationsService } from './conversations/conversations.service';
 import { ConversationsController } from './conversations/conversations.controller';
 import { CustomersService } from './customers/customers.service';
 import { CustomersController } from './customers/customers.controller';
+import { AiService } from './ai/ai.service';
+import { AiController } from './ai/ai.controller';
 import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
@@ -39,6 +41,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     ChannelsController,
     ConversationsController,
     CustomersController,
+    AiController,
   ],
   providers: [
     PrismaService,
@@ -56,6 +59,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     ChannelsService,
     ConversationsService,
     CustomersService,
+    AiService,
   ],
   exports: [
     PrismaService,
@@ -66,6 +70,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     CsrfGuard,
     ConversationsService,
     CustomersService,
+    AiService,
   ],
 })
 export class AppModule { }

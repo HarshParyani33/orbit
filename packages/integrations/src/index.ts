@@ -20,3 +20,8 @@ export interface IChannelAdapter {
   readonly provider: string;
   sendMessage(payload: ChannelMessagePayload): Promise<ChannelAdapterResult>;
 }
+
+// AI Provider Contracts & Adapters
+export * from './ai/types';
+export * from './ai/mock-provider';
+export * from './ai/openai-provider';
