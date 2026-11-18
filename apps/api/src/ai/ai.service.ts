@@ -1,11 +1,13 @@
 import {
   Injectable,
   Inject,
+  Optional,
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
 import { TenantTransactionRunner } from '../tenancy/tenant-transaction-runner';
 import { PrismaService } from '../prisma/prisma.service';
+import { KnowledgeService } from '../knowledge/knowledge.service';
 import {
   CreateAiConfigInput,
 } from '@orbit/validation';
@@ -14,6 +16,8 @@ import {
   MockAiProvider,
   OpenAiProvider,
   AiMessage,
+  CitationValidator,
+  GroundingSourceChunk,
 } from '@orbit/integrations';
 
 @Injectable()
@@ -22,7 +26,10 @@ export class AiService {
     @Inject(TenantTransactionRunner)
     private readonly tenantRunner: TenantTransactionRunner,
     @Inject(PrismaService)
-    private readonly prisma: PrismaService
+    private readonly prisma: PrismaService,
+    @Optional()
+    @Inject(KnowledgeService)
+    private readonly knowledgeService?: KnowledgeService,
   ) {}
 
   private getProviderInstance(provider: string, model: string): IAiProvider {
@@ -123,7 +130,7 @@ export class AiService {
   async generateSuggestion(
     organizationId: string,
     conversationId: string,
-    options?: { mockReply?: string }
+    options?: { mockReply?: string; minSimilarity?: number }
   ) {
     return this.tenantRunner.runWithTenant(organizationId, async (tx) => {
       // 1. Fetch conversation and messages
@@ -194,6 +201,65 @@ export class AiService {
         ? (aiConfig.policyRules as string[])
         : [];
 
+      // 5.1 Semantic Knowledge Retrieval & Grounding (Section 9 Architecture)
+      let dynamicInstructions = aiConfig.systemInstructions;
+      const chunkMap = new Map<string, GroundingSourceChunk>();
+
+      if (this.knowledgeService) {
+        const docCount = await tx.knowledgeDocument.count({
+          where: { organizationId, status: 'ACTIVE' },
+        });
+
+        if (docCount > 0) {
+          const lastCustomerMsg = [...conversation.messages]
+            .reverse()
+            .find((m) => m.senderType === 'CUSTOMER');
+
+          if (lastCustomerMsg && lastCustomerMsg.content) {
+            const knowledgeResults = await this.knowledgeService.searchSimilarChunks(
+              organizationId,
+              {
+                query: lastCustomerMsg.content,
+                minSimilarity: options?.minSimilarity ?? 0.7,
+                limit: 3,
+              },
+            );
+
+            if (knowledgeResults.totalMatched === 0) {
+              // Insufficient-Evidence Abstention (Section 9.2)
+              return {
+                bypassed: true,
+                reason: 'LOW_RELEVANCE',
+                message:
+                  'I do not have sufficient information regarding that, but I can connect you with our team.',
+                escalatedToHuman: true,
+              };
+            }
+
+            for (const item of knowledgeResults.results) {
+              chunkMap.set(item.id, {
+                id: item.id,
+                chunkText: item.chunkText,
+                documentTitle: item.documentTitle,
+              });
+            }
+
+            const knowledgeBlock =
+              `\n\n<verified_knowledge>\n` +
+              knowledgeResults.results
+                .map(
+                  (r) =>
+                    `[Source: ${r.id}] (Title: "${r.documentTitle}")\n${r.chunkText}`,
+                )
+                .join('\n\n') +
+              `\n</verified_knowledge>\n` +
+              `CRITICAL INSTRUCTION: You MUST ground your answer strictly in the <verified_knowledge> above. For every factual claim, number, or price, you MUST cite the source chunk using [Source: chunk-id] format. Never fabricate citations or claim facts not present in the sources.`;
+
+            dynamicInstructions = `${dynamicInstructions || ''}\n${knowledgeBlock}`;
+          }
+        }
+      }
+
       const promptMessages: AiMessage[] = conversation.messages.map((m) => {
         if (m.senderType === 'CUSTOMER') {
           return {
@@ -229,11 +295,27 @@ export class AiService {
 
       const completion = await provider.generateResponse({
         messages: promptMessages,
-        systemInstructions: aiConfig.systemInstructions,
+        systemInstructions: dynamicInstructions,
         policyRules,
         model: aiConfig.model,
         temperature: Number(aiConfig.temperature),
       });
+
+      // 7.1 Deterministic Citation & Fact Verification (Section 9.1)
+      let citations: string[] = [];
+      if (chunkMap.size > 0) {
+        const validation = CitationValidator.validate(completion.content, chunkMap);
+        if (!validation.isValid) {
+          return {
+            bypassed: true,
+            reason: validation.violationReason,
+            message: `AI suggestion rejected due to grounding failure: ${validation.errorDetails}`,
+            escalatedToHuman: true,
+            requestId: aiRequest.id,
+          };
+        }
+        citations = validation.citedChunkIds;
+      }
 
       // 8. Mathematical Cost Accounting
       const promptRate = Number(pricing.promptTokenRatePerM);
@@ -281,6 +363,7 @@ export class AiService {
         tokens: completion.totalTokens,
         incurredCostUsd,
         requestId: aiRequest.id,
+        citations,
       };
     });
   }

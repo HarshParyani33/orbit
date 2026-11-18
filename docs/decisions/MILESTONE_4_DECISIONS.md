@@ -128,7 +128,7 @@ This document records the architectural and engineering decisions for **Mileston
 
 ## Decision 37: Multi-Tenant Vector Retrieval Engine & Semantic Search API (Milestone 4 Slice 4.3)
 
-- **Status:** APPROVED & VERIFIED (Commit pending, local 8/8 tests green)
+- **Status:** APPROVED & VERIFIED (Commit `7c2dc3a`, CI Run `44341300373`)
 - **Date:** 2026-11-18
 - **Context:**
   With documents and vector chunks stored in PostgreSQL 16 via pgvector, Project Orbit requires a dedicated vector retrieval engine that performs semantic similarity searches against tenant knowledge.
@@ -189,5 +189,45 @@ This document records the architectural and engineering decisions for **Mileston
     - Input validation rejecting invalid or oversized queries (`400 Bad Request`).
     - HTTP endpoint contract verification for `POST /api/knowledge/search`.
   - Monorepo full test suite: 286/286 passed across all 25 test suites.
+  - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
+  - **GitHub Actions CI Verification:** [CI Run #44341300373](https://github.com/HarshParyani33/orbit/actions/runs/44341300373) completed with conclusion `success` across all 17 pipeline steps.
+
+---
+
+## Decision 38: Evidence-Based AI Grounding & Citation Validation Pipeline (Milestone 4 Slice 4.4)
+
+- **Status:** APPROVED & VERIFIED (Commit pending, local 8/8 tests green)
+- **Date:** 2026-11-18
+- **Context:**
+  Conforming to `docs/ARCHITECTURE.md` Section 9 ("Evidence-Based AI Grounding & Verification"), vector similarity measures retrieval relevance, never factual correctness.
+  
+  To prevent LLM hallucination, ungrounded numbers/prices, fabricated citations, and contradictory claims from reaching customers, Project Orbit requires an automated, deterministic grounding and citation verification pipeline before AI responses can be delivered or suggested to human agents.
+
+- **Decision:**
+  1. **Deterministic Citation Verification (`CitationValidator` in `@orbit/integrations`):**
+     - Extracts citation tokens matching `\[Source:\s*([a-zA-Z0-9_-]+)\]`.
+     - Maintains an immutable retrieved chunk map `Map<chunkId, ChunkMetadata>`.
+     - **Rule 1 (Fabricated ID Detection):** Verifies that every cited chunk ID in the candidate answer exists in the retrieved chunk map. If an unknown or fabricated ID is cited, the answer is rejected with reason `INVALID_CITATION_ID`.
+     - **Rule 2 (Extractive Fact Verification):** Identifies factual entities (prices with currency symbols, duration windows, percentages, numeric quantities, SKUs). Validates that every extracted entity appears verbatim in at least one of the cited source chunks. If an ungrounded entity is detected, the answer is rejected with reason `UNGROUNDED_ENTITY`.
+  2. **Insufficient Evidence Abstention:**
+     - When no knowledge chunks meet the minimum similarity threshold (`minSimilarity`), the AI layer automatically abstains with reason `LOW_RELEVANCE`, returning a standard escalation response:
+       *"I do not have sufficient information regarding that, but I can connect you with our team."*
+  3. **Grounding Integration in `AiService`:**
+     - `AiService.generateSuggestion` queries `KnowledgeService.searchSimilarChunks(organizationId, { query: lastCustomerMessage, minSimilarity: 0.70, limit: 3 })`.
+     - Assembles prompt with explicit `<verified_knowledge>` block containing chunk IDs and metadata.
+     - Validates candidate answer against `CitationValidator`.
+     - If validation fails, marks the generation attempt with the respective violation reason and triggers human escalation.
+
+- **Evidence & Verification:**
+  - Implemented `CitationValidator` in `@orbit/integrations` enforcing deterministic detection of fabricated citation IDs (`INVALID_CITATION_ID`) and extractive fact verification for prices, quantities, and durations (`UNGROUNDED_ENTITY`).
+  - Integrated `KnowledgeService.searchSimilarChunks` and `CitationValidator` into `AiService.generateSuggestion`.
+  - Implemented automatic insufficient-evidence abstention (`LOW_RELEVANCE`) when no relevant knowledge meets threshold.
+  - Authored and executed automated integration test suite `tests/integration/ai-grounding-citations.spec.ts` (8 tests) verifying:
+    - Successful delivery of well-grounded answer citing valid chunk IDs.
+    - Deterministic rejection of fabricated citation IDs (`INVALID_CITATION_ID`).
+    - Rejection of hallucinated numbers or prices not present in cited source text (`UNGROUNDED_ENTITY`).
+    - Automatic abstention when similarity is below threshold (`LOW_RELEVANCE`).
+    - End-to-end integration with `AiService.generateSuggestion`.
+  - Monorepo full test suite: 294/294 passed across all 26 test suites.
   - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
 
