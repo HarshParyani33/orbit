@@ -236,7 +236,7 @@ This document records the architectural and engineering decisions for **Mileston
 
 ## Decision 39: Knowledge Base Frontend UI & Interactive Management Dashboard (Milestone 4 Slice 4.5)
 
-- **Status:** APPROVED & VERIFIED (Commit for Slice 4.5)
+- **Status:** APPROVED & VERIFIED (Commit `ccc8309`, CI Run `44346190374`)
 - **Date:** 2026-11-18
 - **Context:**
   Having built the complete vector backend pipeline (pgvector schema, chunking engine, embedding service, semantic vector retrieval, and deterministic evidence-based grounding), Project Orbit requires a user-facing Knowledge Base dashboard in `@orbit/web`.
@@ -272,3 +272,4 @@ This document records the architectural and engineering decisions for **Mileston
   - Authored unit test suite `tests/unit/knowledge-client.spec.ts` (6 tests) verifying all API client methods, headers, serializations, and error handling.
   - Monorepo full test suite: 300/300 passed across all 27 test suites.
   - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (production Vite bundle) all cleanly pass with exit code 0.
+  - **GitHub Actions CI Verification:** [CI Run #44346190374](https://github.com/HarshParyani33/orbit/actions/runs/44346190374) completed with conclusion `success` across all 17 pipeline steps.
