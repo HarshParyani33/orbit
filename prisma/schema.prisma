@@ -59,6 +59,8 @@ model Organization {
   webhookEvents      WebhookEvent[]
   messageAttachments MessageAttachment[]
   subscription       Subscription?
+  knowledgeDocuments KnowledgeDocument[]
+  knowledgeChunks    KnowledgeChunk[]
 
   @@map("organizations")
 }
@@ -446,6 +448,45 @@ model Subscription {
   @@index([stripeCustomerId])
   @@index([status])
   @@map("subscriptions")
+}
+
+model KnowledgeDocument {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  title          String   @db.VarChar(255)
+  sourceType     String   @default("MANUAL_ENTRY") @map("source_type") @db.VarChar(50)
+  content        String   @db.Text
+  status         String   @default("ACTIVE") @db.VarChar(50)
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  chunks       KnowledgeChunk[]
+
+  @@unique([id, organizationId], name: "uq_knowledge_documents_id_org")
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@map("knowledge_documents")
+}
+
+model KnowledgeChunk {
+  id             String                      @id @default(uuid()) @db.Uuid
+  organizationId String                      @map("organization_id") @db.Uuid
+  documentId     String                      @map("document_id") @db.Uuid
+  chunkIndex     Int                         @map("chunk_index")
+  chunkText      String                      @map("chunk_text") @db.Text
+  tokenCount     Int                         @default(0) @map("token_count")
+  embedding      Unsupported("vector(1536)")
+  metadata       Json                        @default("{}")
+  createdAt      DateTime                    @default(now()) @map("created_at") @db.Timestamptz()
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  document     KnowledgeDocument @relation(fields: [documentId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId], name: "uq_knowledge_chunks_id_org")
+  @@index([organizationId, documentId])
+  @@map("knowledge_chunks")
 }
 
 
