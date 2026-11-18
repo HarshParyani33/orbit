@@ -62,6 +62,7 @@ $ python .agents/skills/gravitas/scripts/doctor.py
 | **Finding 10** | P2 | Session Correlation & Auth Lifecycle | `auth-context.tsx` did not synchronize `setActiveUserId` or call `markLoggedOut()`; sibling refresh check had a counter-bypass bug; stale tabs could adopt another user's session after account switch. | Wired `setActiveUserId` and `markLoggedOut()` into auth lifecycle; eliminated counter-bypass; implemented `isTabLoggedOut` in-memory invalidation preventing stale tab credential reuse. | `apps/web/src/api/client.ts`, `apps/web/src/context/auth-context.tsx`, `tests/browser/cross-tab-refresh.browser.spec.ts` | **RESOLVED** |
 | **Finding 11** | P2 | Continuous Integration Pipeline | Missing verified GitHub Actions workflow definition for continuous integration across all workspaces, databases, and browser tests. | Authored `.github/workflows/ci.yml` providing automated verification across Node 22, PostgreSQL 16 (pgvector), Redis 7, and Playwright Chromium. | `.github/workflows/ci.yml` | **RESOLVED** |
 | **Finding 12** | P1 | Login After Logout & Cookie Scoping | Re-authenticating after logout was blocked by obsolete `logged_out` status; `refresh_token` cookie path (`/api/auth/refresh`) prevented `POST /api/auth/logout` from revoking database sessions; BroadcastChannel could adopt cross-tab session contamination or stale messages. | Implemented Decision 22: session epoch and logout epoch versioning (`LogoutRecord`); scoped `refresh_token` cookie to `/api/auth` across both login and logout; dropped `ORBIT_LOGIN` broadcast; added stale broadcast drop guard (`epoch >= currentSessionEpoch`); BroadcastChannel + storage sync to eliminate Chromium cross-process IPC lag. | `apps/api/src/auth/auth.controller.ts`, `apps/web/src/api/client.ts`, `tests/unit/cross-tab-refresh.spec.ts`, `tests/browser/cross-tab-refresh.browser.spec.ts` | **RESOLVED** |
+| **Finding 13** | P1 | In-Flight Refresh Race & Relogin Invalidation | `executeSingleFlightRefresh` and `requestTokenRefresh` broadcast `ORBIT_REFRESH_FAILED` with `epoch: Date.now()`, causing stale failure events from older sessions to be evaluated as newer than fresh session epochs established after relogin (`failureTimestamp > newSessionEpoch`), falsely invalidating active sessions. | Implemented Decision 22.5: bound `executeSingleFlightRefresh` and `requestTokenRefresh` to `originatingEpoch` and `originatingUserId`. Failure broadcasts strictly transmit originating session metadata. Sibling tabs and the active tab drop any `ORBIT_REFRESH_FAILED`, `ORBIT_LOGOUT`, or `ORBIT_REFRESH_COMPLETE` where `msg.epoch < currentSessionEpoch` or `msg.userId !== currentUserId`. Guarded in-flight completion against overwriting newer local sessions. | `apps/web/src/api/client.ts`, `tests/unit/cross-tab-refresh.spec.ts` (Tests 8d-8h) | **RESOLVED** |
 
 ---
 
@@ -93,8 +94,8 @@ The repository test suite is rigorously classified into four distinct verificati
 
 ```
 Test Files  10 passed (10)
-     Tests  109 passed (109)
-  Duration  19.50s
+     Tests  114 passed (114)
+  Duration  20.53s
 ```
 
 ### 4.1 Tier 1: Real Multi-Tab Browser Tests (Playwright & Headless Google Chrome)
@@ -112,7 +113,7 @@ Test Files  10 passed (10)
 ### 4.2 Tier 2: Simulated Context & Unit Tests (Vitest)
 * **Test Files:**
   - `tests/unit/client-refresh.spec.ts` (6 tests): Single-flight promise sharing, in-tab monotonic stale 401 interception, simultaneous caller batching.
-  - `tests/unit/cross-tab-refresh.spec.ts` (13 tests): Web Locks serialization, stale 401 interception, fail-closed lock abort, interim sibling reuse, zero token leakage, fail-closed missing Web Locks, session correlation account-switch rejection, logout state clearing, formal proof of localStorage election race flaw, adversarial stale owner lease recovery, login after logout epoch advancement (Test 8b), and stale broadcast drop invariant (Test 8c).
+  - `tests/unit/cross-tab-refresh.spec.ts` (18 tests): Web Locks serialization, stale 401 interception, fail-closed lock abort, interim sibling reuse, zero token leakage, fail-closed missing Web Locks, session correlation account-switch rejection, logout state clearing, formal proof of localStorage election race flaw, adversarial stale owner lease recovery, login after logout epoch advancement (Test 8b), stale broadcast drop invariant (Test 8c), priority stale refresh failure after relogin (Test 8d), user identity mismatch protection (Test 8e), out-of-order broadcast protection (Test 8f), active session refresh failure handling (Test 8g), and in-flight refresh failure race elimination (Test 8h).
   - `tests/unit/config-jwt.spec.ts` (8 tests): Environment configuration validation, production 32-character secret enforcement, fail-fast schema validation.
 
 ### 4.3 Tier 3: Real Database & Tenant Isolation Tests (PostgreSQL 16)
@@ -156,3 +157,8 @@ In compliance with Gravitas Invariant 6 (*"Say what cannot be verified"*):
 
 Milestone 1 foundation, multi-tenant security architecture, authentication lifecycle, and concurrency coordination are complete and verified by fresh, reproducible automated evidence.
 All quality gates are 100% green. Zero Milestone 2 features were prematurely implemented. Milestone 1 is closed.
+
+### GitHub Actions Continuous Integration Evidence
+* **Run `#44261500338`** (commit `402df2e`): **100% Green / Success** (all 17 workflow steps passed).
+* **Run `#44261976859`** (commit `a94234b`): **100% Green / Success** (all 17 workflow steps passed).
+* **Run `#44272960045`** (commit `908816e`): **100% Green / Success** (all 17 workflow steps passed, including Playwright Chromium, PostgreSQL 16 migrations, seeder, typecheck, lint, build, unit, integration, and real browser tests).
