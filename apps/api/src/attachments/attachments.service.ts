@@ -58,8 +58,10 @@ export class AttachmentsService {
       return `attachment_${Date.now()}`;
     }
 
-    // Strip path components
-    let clean = path.basename(fileName);
+    // Cross-platform normalization: convert backslashes to forward slashes first
+    let clean = fileName.replace(/\\/g, '/');
+    clean = path.posix.basename(clean);
+    clean = clean.replace(/^[a-zA-Z]:/, '');
 
     // Remove null bytes, slashes, control chars, and directory traversal tokens
     clean = clean.replace(/[\0\r\n\t]/g, '');
