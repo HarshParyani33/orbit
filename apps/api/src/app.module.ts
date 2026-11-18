@@ -23,6 +23,10 @@ import { AiController } from './ai/ai.controller';
 import { WidgetService } from './widget/widget.service';
 import { WidgetController } from './widget/widget.controller';
 import { WidgetGuard } from './widget/widget.guard';
+import { AutomationsService } from './automations/automations.service';
+import { AutomationsController } from './automations/automations.controller';
+import { AnalyticsService } from './analytics/analytics.service';
+import { AnalyticsController } from './analytics/analytics.controller';
 import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
@@ -46,6 +50,8 @@ import { RealtimeModule } from './realtime/realtime.module';
     CustomersController,
     AiController,
     WidgetController,
+    AutomationsController,
+    AnalyticsController,
   ],
   providers: [
     PrismaService,
@@ -66,6 +72,8 @@ import { RealtimeModule } from './realtime/realtime.module';
     CustomersService,
     AiService,
     WidgetService,
+    AutomationsService,
+    AnalyticsService,
   ],
   exports: [
     PrismaService,
@@ -78,6 +86,8 @@ import { RealtimeModule } from './realtime/realtime.module';
     CustomersService,
     AiService,
     WidgetService,
+    AutomationsService,
+    AnalyticsService,
   ],
 })
 export class AppModule { }

@@ -55,6 +55,7 @@ model Organization {
   memberships      OrganizationMembership[]
   channels         Channel[]
   aiConfigurations AiConfiguration[]
+  automationRules  AutomationRule[]
 
   @@map("organizations")
 }
@@ -175,9 +176,10 @@ model Conversation {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
 
-  channel  Channel   @relation(fields: [channelId, organizationId], references: [id, organizationId], onDelete: Restrict)
-  customer Customer? @relation(fields: [customerId, organizationId], references: [id, organizationId], onDelete: Restrict)
-  messages Message[]
+  channel          Channel                    @relation(fields: [channelId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  customer         Customer?                  @relation(fields: [customerId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  messages         Message[]
+  automationAudits AutomationExecutionAudit[]
 
   @@unique([id, organizationId], name: "uq_conversations_id_org")
   @@index([organizationId, status])
@@ -318,3 +320,48 @@ model AiUsageEvent {
   @@index([organizationId, createdAt])
   @@map("ai_usage_events")
 }
+
+// ==============================================================================
+// 5. TENANT-DOMAIN AUTOMATION ENGINE MODELS (Category A — Governed by RLS)
+// ==============================================================================
+
+model AutomationRule {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  name           String    @db.VarChar(128)
+  trigger        String    @db.VarChar(32) // CONVERSATION_CREATED, MESSAGE_RECEIVED, CONVERSATION_RESOLVED
+  conditions     Json      @default("[]") // Array of { field, operator, value }
+  actions        Json      @default("[]") // Array of { type, payload }
+  enabled        Boolean   @default(true)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  organization Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  audits       AutomationExecutionAudit[]
+
+  @@unique([id, organizationId], name: "uq_automation_rules_id_org")
+  @@index([organizationId, trigger, enabled])
+  @@map("automation_rules")
+}
+
+model AutomationExecutionAudit {
+  id              String   @id @default(uuid()) @db.Uuid
+  organizationId  String   @map("organization_id") @db.Uuid
+  ruleId          String   @map("rule_id") @db.Uuid
+  conversationId  String   @map("conversation_id") @db.Uuid
+  trigger         String   @db.VarChar(32)
+  matched         Boolean  @default(false)
+  actionsExecuted Json     @default("[]") @map("actions_executed")
+  status          String   @default("SUCCESS") @db.VarChar(24) // SUCCESS, FAILED, SKIPPED
+  errorMessage    String?  @map("error_message") @db.Text
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  rule         AutomationRule @relation(fields: [ruleId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  conversation Conversation   @relation(fields: [conversationId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId], name: "uq_automation_audits_id_org")
+  @@index([organizationId, conversationId])
+  @@index([organizationId, ruleId])
+  @@map("automation_execution_audits")
+}
+

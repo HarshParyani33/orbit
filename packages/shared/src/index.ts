@@ -163,6 +163,48 @@ export interface WidgetConversationResponse {
   messages: MessageSummary[];
 }
 
+export interface AutomationRuleSummary {
+  id: string;
+  organizationId: string;
+  name: string;
+  trigger: string;
+  conditions: Array<{ field: string; operator: string; value: any }>;
+  actions: Array<{ type: string; payload: any }>;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationExecutionAuditSummary {
+  id: string;
+  organizationId: string;
+  ruleId: string;
+  conversationId: string;
+  trigger: string;
+  matched: boolean;
+  actionsExecuted: any[];
+  status: string;
+  errorMessage?: string | null;
+  createdAt: string;
+}
+
+export interface AnalyticsOverviewResponse {
+  totalConversations: number;
+  openConversations: number;
+  resolvedConversations: number;
+  snoozedConversations: number;
+  totalMessages: number;
+  messagesBySender: {
+    customer: number;
+    agent: number;
+    ai: number;
+    system: number;
+  };
+  averageFirstResponseTimeMs: number | null;
+  aiHandledConversationsCount: number;
+  totalAutomationAuditsCount: number;
+}
+
 export interface AuthTokenResponse {
   user: AuthenticatedUser;
   organizations: OrganizationSummary[];

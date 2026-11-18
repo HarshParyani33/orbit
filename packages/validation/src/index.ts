@@ -145,6 +145,29 @@ export const widgetSendMessageSchema = z.object({
   content: z.string().min(1, 'Message cannot be empty').max(10000, 'Message too long').trim(),
 });
 
+export const createAutomationRuleSchema = z.object({
+  name: z.string().min(2, 'Rule name must be at least 2 characters').max(128).trim(),
+  trigger: z.enum(['CONVERSATION_CREATED', 'MESSAGE_RECEIVED', 'CONVERSATION_RESOLVED']),
+  conditions: z
+    .array(
+      z.object({
+        field: z.string().min(1),
+        operator: z.enum(['EQUALS', 'CONTAINS', 'STARTS_WITH', 'IN']),
+        value: z.any(),
+      })
+    )
+    .default([]),
+  actions: z
+    .array(
+      z.object({
+        type: z.enum(['UPDATE_STATUS', 'SEND_SYSTEM_MESSAGE', 'ASSIGN_PRIORITY', 'ESCALATE_HUMAN']),
+        payload: z.record(z.any()),
+      })
+    )
+    .min(1, 'At least one action is required'),
+  enabled: z.boolean().default(true),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type CreateOrganizationInput = z.infer<typeof createOrganizationSchema>;
@@ -165,3 +188,4 @@ export type CreateAiConfigInput = z.infer<typeof createAiConfigSchema>;
 export type GenerateAiSuggestionInput = z.infer<typeof generateAiSuggestionSchema>;
 export type WidgetSessionInitInput = z.infer<typeof widgetSessionInitSchema>;
 export type WidgetSendMessageInput = z.infer<typeof widgetSendMessageSchema>;
+export type CreateAutomationRuleInput = z.infer<typeof createAutomationRuleSchema>;

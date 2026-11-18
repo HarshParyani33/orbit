@@ -210,6 +210,41 @@ This document records the architectural and engineering decisions for **Mileston
   - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
   - **GitHub Actions CI Verification:** [CI Run #44315972086](https://github.com/HarshParyani33/orbit/actions/runs/44315972086) completed with conclusion `success` across all 17 pipeline steps.
 
+---
+
+## Decision 29: Automation Engine, SLA Metrics & Queue Processing (Milestone 2 Slice 2.7)
+- **Status:** APPROVED & IN IMPLEMENTATION
+- **Date:** 2026-11-18
+- **Context:**
+  Milestone 2 Slice 2.7 delivers the Initial Automation Engine and SLA Analytics to Project Orbit, completing the Milestone 2 capabilities required by `docs/PROJECT_CONTEXT.md` (Modules 8 & 9) and `docs/ARCHITECTURE.md` Section 9.
+  The design must guarantee:
+  1. Strict multi-tenant row-level security across automation rules and execution audit trails.
+  2. Safe condition evaluation without dynamic code injection (interpreting JSON condition ASTs).
+  3. Immutable execution audits recording trigger, matched state, actions executed, and timestamps.
+  4. Real-time conversation metrics (first response time, resolution status breakdowns, volume by sender type).
+  5. Idempotent background job processing with tenant scoping.
+- **Architectural Specifications & Invariants:**
+  1. **Automation Rule Data Models (`automation_rules` & `automation_execution_audits`):**
+     - Category A models governed by PostgreSQL RLS with `TenantTransactionRunner.runWithTenant(organizationId)`.
+     - Triggers: `CONVERSATION_CREATED`, `MESSAGE_RECEIVED`, `CONVERSATION_RESOLVED`.
+     - Condition predicates: `EQUALS`, `CONTAINS`, `STARTS_WITH`, `IN`.
+     - Action handlers: `UPDATE_STATUS`, `SEND_SYSTEM_MESSAGE`, `ASSIGN_PRIORITY`, `ESCALATE_HUMAN`.
+     - Execution records immutable audit log in `automation_execution_audits`.
+  2. **Analytics & SLA Calculation:**
+     - Computes conversation volume, status distributions (Open, Resolved, Snoozed), and message sender breakdown (Customer, Agent, AI, System).
+     - Calculates First Response Time (FRT) in milliseconds between the initial customer inquiry and the earliest subsequent agent response.
+     - Strictly tenant-bounded: all aggregations occur inside tenant transaction runner with RLS enforcement.
+  3. **Idempotent Queue Consumer (`@orbit/worker`):**
+     - Jobs mandate `organizationId` payload and deterministic `jobId` / idempotency key.
+     - Workers execute exclusively inside `TenantTransactionRunner.runWithTenant(job.data.organizationId)`.
+- **Evidence & Verification:**
+  - Database Migration: `20261118000003_automations_and_audits` created `automation_rules` and `automation_execution_audits` with forced Row Level Security (RLS) and `orbit_app` least-privilege grants.
+  - 10 comprehensive integration tests in `tests/integration/automation-analytics.spec.ts` covering rule condition evaluation (`CONTAINS`, `EQUALS`), action execution (status transition, auto-reply notices), immutable execution audits, SLA first response time (FRT) calculation, cross-tenant metric isolation, and worker job idempotency.
+  - Full test suite: 198/198 tests passing across all 17 suites.
+  - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
+
+
+
 
 
 

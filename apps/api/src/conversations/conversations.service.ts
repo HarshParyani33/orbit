@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { TenantTransactionRunner } from '../tenancy/tenant-transaction-runner';
 import { RealtimeService } from '../realtime/realtime.service';
+import { AutomationsService } from '../automations/automations.service';
 import {
   CreateConversationInput,
   ListConversationsQuery,
@@ -20,7 +21,10 @@ export class ConversationsService {
     private readonly tenantRunner: TenantTransactionRunner,
     @Optional()
     @Inject(RealtimeService)
-    private readonly realtimeService?: RealtimeService
+    private readonly realtimeService?: RealtimeService,
+    @Optional()
+    @Inject(AutomationsService)
+    private readonly automationsService?: AutomationsService
   ) { }
 
   async listConversations(organizationId: string, query: ListConversationsQuery) {
@@ -193,6 +197,12 @@ export class ConversationsService {
     });
 
     this.realtimeService?.emitConversationCreated(organizationId, result);
+    if (this.automationsService) {
+      await this.automationsService.evaluateRules(organizationId, 'CONVERSATION_CREATED', {
+        conversationId: result.id,
+        status: result.status,
+      });
+    }
     return result;
   }
 
@@ -234,6 +244,12 @@ export class ConversationsService {
     });
 
     this.realtimeService?.emitConversationStatusChanged(organizationId, conversationId, status);
+    if (this.automationsService && status === 'RESOLVED') {
+      await this.automationsService.evaluateRules(organizationId, 'CONVERSATION_RESOLVED', {
+        conversationId,
+        status: 'RESOLVED',
+      });
+    }
     return updated;
   }
 
@@ -303,6 +319,12 @@ export class ConversationsService {
     });
 
     this.realtimeService?.emitMessageCreated(organizationId, conversationId, message);
+    if (this.automationsService && data.senderType === 'CUSTOMER') {
+      await this.automationsService.evaluateRules(organizationId, 'MESSAGE_RECEIVED', {
+        conversationId,
+        messageContent: data.content,
+      });
+    }
     return message;
   }
 }
