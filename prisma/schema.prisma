@@ -56,6 +56,7 @@ model Organization {
   channels         Channel[]
   aiConfigurations AiConfiguration[]
   automationRules  AutomationRule[]
+  webhookEvents    WebhookEvent[]
 
   @@map("organizations")
 }
@@ -96,6 +97,7 @@ model Channel {
   routingLookups     ChannelRoutingLookup[]
   conversations      Conversation[]
   customerIdentities CustomerChannelIdentity[]
+  webhookEvents      WebhookEvent[]
 
   @@unique([id, organizationId], name: "uq_channels_id_org")
   @@index([organizationId])
@@ -364,4 +366,37 @@ model AutomationExecutionAudit {
   @@index([organizationId, ruleId])
   @@map("automation_execution_audits")
 }
+
+model WebhookEvent {
+  id                String    @id @default(uuid()) @db.Uuid
+  organizationId    String    @map("organization_id") @db.Uuid
+  channelId         String    @map("channel_id") @db.Uuid
+  provider          String    @db.VarChar(32)
+  idempotencyKey    String    @map("idempotency_key") @db.VarChar(255)
+  dispatchStatus    String    @default("PENDING_DISPATCH") @map("dispatch_status") @db.VarChar(24)
+  dispatchToken     String?   @map("dispatch_token") @db.Uuid
+  dispatchExpiresAt DateTime? @map("dispatch_expires_at") @db.Timestamptz()
+  processingStatus  String    @default("UNCLAIMED") @map("processing_status") @db.VarChar(24)
+  payload           Json
+  attemptCount      Int       @default(0) @map("attempt_count")
+  maxAttempts       Int       @default(5) @map("max_attempts")
+  leaseToken        String?   @map("lease_token") @db.Uuid
+  leaseExpiresAt    DateTime? @map("lease_expires_at") @db.Timestamptz()
+  lastError         String?   @map("last_error") @db.Text
+  nextRetryAt       DateTime? @map("next_retry_at") @db.Timestamptz()
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+  processedAt       DateTime? @map("processed_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  channel      Channel      @relation(fields: [channelId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId], name: "uq_webhook_events_id_org")
+  @@unique([organizationId, channelId, provider, idempotencyKey], name: "uq_webhook_provider_event")
+  @@index([dispatchStatus, createdAt, dispatchExpiresAt], name: "idx_webhook_dispatch_sweeper")
+  @@index([processingStatus, leaseExpiresAt, nextRetryAt], name: "idx_webhook_processing_sweeper")
+  @@index([organizationId, createdAt], name: "idx_webhook_org_created")
+  @@map("webhook_events")
+}
+
 

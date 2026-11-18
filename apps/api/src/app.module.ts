@@ -28,6 +28,10 @@ import { AutomationsController } from './automations/automations.controller';
 import { AnalyticsService } from './analytics/analytics.service';
 import { AnalyticsController } from './analytics/analytics.controller';
 import { RealtimeModule } from './realtime/realtime.module';
+import { WebhooksController } from './webhooks/webhooks.controller';
+import { IngressDatabaseService } from './webhooks/ingress-database.service';
+import { WebhookOutboxService } from './webhooks/webhook-outbox.service';
+import { MetaSignatureGuard } from './webhooks/guards/meta-signature.guard';
 
 @Module({
   imports: [
@@ -52,6 +56,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     WidgetController,
     AutomationsController,
     AnalyticsController,
+    WebhooksController,
   ],
   providers: [
     PrismaService,
@@ -59,6 +64,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     AuthService,
     JwtAuthGuard,
     WidgetGuard,
+    MetaSignatureGuard,
     CsrfGuard,
     {
       provide: APP_GUARD,
@@ -74,6 +80,8 @@ import { RealtimeModule } from './realtime/realtime.module';
     WidgetService,
     AutomationsService,
     AnalyticsService,
+    IngressDatabaseService,
+    WebhookOutboxService,
   ],
   exports: [
     PrismaService,
@@ -88,6 +96,8 @@ import { RealtimeModule } from './realtime/realtime.module';
     WidgetService,
     AutomationsService,
     AnalyticsService,
+    IngressDatabaseService,
+    WebhookOutboxService,
   ],
 })
 export class AppModule { }

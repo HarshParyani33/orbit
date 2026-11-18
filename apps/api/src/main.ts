@@ -16,7 +16,7 @@ export async function createApp(): Promise<INestApplication> {
   // Fail-fast configuration validation: throws immediately if config is missing or insecure
   getConfig();
 
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { rawBody: true });
   configureApp(app);
   return app;
 }

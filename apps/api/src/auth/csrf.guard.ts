@@ -59,8 +59,12 @@ export class CsrfGuard implements CanActivate {
       return true;
     }
 
-    // 2. Ingress & public widget endpoints are protected by capability tokens / Origin checks, not ambient session cookies
-    if (request.path?.startsWith('/api/widget')) {
+    // 2. Ingress, public widget & webhook endpoints are protected by capability tokens / signatures, not ambient session cookies
+    if (
+      request.path?.startsWith('/api/widget') ||
+      request.path?.startsWith('/api/webhooks') ||
+      request.path?.startsWith('/webhooks')
+    ) {
       return true;
     }
 

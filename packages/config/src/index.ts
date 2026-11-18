@@ -34,6 +34,10 @@ export const envSchema = z
     JWT_SECRET: z.string().optional(),
     COOKIE_SECRET: z.string().optional(),
     WIDGET_JWT_SECRET: z.string().optional(),
+
+    // Webhook Secrets
+    META_APP_SECRET: z.string().optional(),
+    META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     const isProd = data.NODE_ENV === 'production';
@@ -105,12 +109,32 @@ export const envSchema = z
     } else {
       data.WIDGET_JWT_SECRET = data.JWT_SECRET || 'dev_widget_session_signing_secret_key_32_characters';
     }
+
+    // 4. Webhook Secrets Validation
+    if (isProd) {
+      if (data.META_APP_SECRET && data.META_APP_SECRET.trim().length < 16) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['META_APP_SECRET'],
+          message: 'META_APP_SECRET must be at least 16 characters long in production',
+        });
+      }
+    } else {
+      if (!data.META_APP_SECRET || data.META_APP_SECRET.trim().length === 0) {
+        data.META_APP_SECRET = 'dev_meta_app_secret_32_characters_long';
+      }
+      if (!data.META_WEBHOOK_VERIFY_TOKEN || data.META_WEBHOOK_VERIFY_TOKEN.trim().length === 0) {
+        data.META_WEBHOOK_VERIFY_TOKEN = 'dev_meta_verify_token';
+      }
+    }
   });
 
 export type EnvConfig = z.infer<typeof envSchema> & {
   JWT_SECRET: string;
   COOKIE_SECRET: string;
   WIDGET_JWT_SECRET: string;
+  META_APP_SECRET: string;
+  META_WEBHOOK_VERIFY_TOKEN: string;
 };
 
 let parsedConfig: EnvConfig | null = null;
