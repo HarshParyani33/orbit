@@ -58,6 +58,7 @@ export const updateChannelSchema = z.object({
 // Conversation Schemas
 export const createConversationSchema = z.object({
   channelId: z.string().uuid('Invalid channel ID'),
+  customerId: z.string().uuid('Invalid customer ID').optional(),
   title: z.string().max(255).optional(),
   initialMessage: z.string().min(1).max(10000).optional(),
 });
@@ -69,6 +70,7 @@ export const updateConversationStatusSchema = z.object({
 export const listConversationsQuerySchema = z.object({
   status: z.enum(['OPEN', 'RESOLVED', 'SNOOZED']).optional(),
   channelId: z.string().uuid().optional(),
+  customerId: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
 });
@@ -77,6 +79,40 @@ export const listConversationsQuerySchema = z.object({
 export const createMessageSchema = z.object({
   content: z.string().min(1, 'Message content cannot be empty').max(10000),
   senderType: z.enum(['CUSTOMER', 'AGENT', 'AI', 'SYSTEM']).default('AGENT'),
+});
+
+// Customer & Identity Schemas
+export const createCustomerSchema = z.object({
+  name: z.string().min(1, 'Name must be at least 1 character').max(128).trim(),
+  email: z.string().email('Invalid email address').toLowerCase().trim().optional(),
+  phone: z.string().max(64).trim().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+export const updateCustomerSchema = z.object({
+  name: z.string().min(1).max(128).trim().optional(),
+  email: z.string().email('Invalid email address').toLowerCase().trim().nullable().optional(),
+  phone: z.string().max(64).trim().nullable().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+export const listCustomersQuerySchema = z.object({
+  search: z.string().max(128).trim().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().uuid().optional(),
+});
+
+export const linkChannelIdentitySchema = z.object({
+  channelId: z.string().uuid('Invalid channel ID'),
+  provider: z.enum(['META_WHATSAPP', 'META_INSTAGRAM', 'WEB_CHAT']),
+  externalId: z.string().min(1, 'External ID cannot be empty').max(128).trim(),
+  verified: z.boolean().default(false),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+export const mergeCustomersSchema = z.object({
+  targetCustomerId: z.string().uuid('Target customer ID is required'),
+  reason: z.string().min(3, 'Reason must be at least 3 characters').max(255).trim(),
 });
 
 export type RegisterInput = z.infer<typeof registerSchema>;
@@ -90,3 +126,8 @@ export type CreateConversationInput = z.infer<typeof createConversationSchema>;
 export type UpdateConversationStatusInput = z.infer<typeof updateConversationStatusSchema>;
 export type ListConversationsQuery = z.infer<typeof listConversationsQuerySchema>;
 export type CreateMessageInput = z.infer<typeof createMessageSchema>;
+export type CreateCustomerInput = z.infer<typeof createCustomerSchema>;
+export type UpdateCustomerInput = z.infer<typeof updateCustomerSchema>;
+export type ListCustomersQuery = z.infer<typeof listCustomersQuerySchema>;
+export type LinkChannelIdentityInput = z.infer<typeof linkChannelIdentitySchema>;
+export type MergeCustomersInput = z.infer<typeof mergeCustomersSchema>;

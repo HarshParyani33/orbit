@@ -60,15 +60,46 @@ export interface MessageSummary {
   createdAt: string;
 }
 
+export interface CustomerChannelIdentitySummary {
+  id: string;
+  channelId: string;
+  provider: string;
+  externalId: string;
+  verified: boolean;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  channel?: Pick<ChannelSummary, 'id' | 'name' | 'provider'>;
+}
+
+export interface CustomerSummary {
+  id: string;
+  organizationId: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  metadata?: Record<string, unknown>;
+  mergedIntoId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  channelIdentities?: CustomerChannelIdentitySummary[];
+  conversations?: ConversationSummary[];
+  _count?: {
+    conversations: number;
+  };
+}
+
 export interface ConversationSummary {
   id: string;
   organizationId: string;
   channelId: string;
+  customerId?: string | null;
   status: string;
   title: string | null;
   createdAt: string;
   updatedAt: string;
   channel?: Pick<ChannelSummary, 'id' | 'name' | 'provider'>;
+  customer?: CustomerSummary | null;
   messages?: MessageSummary[];
   lastMessage?: MessageSummary | null;
 }

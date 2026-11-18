@@ -100,4 +100,42 @@ This document records the architectural and engineering decisions for **Mileston
   - Local quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `vite build` (build) exit code 0.
   - **GitHub Actions CI Verification:** [CI Run #44293770597](https://github.com/HarshParyani33/orbit/actions/runs/44293770597) completed with conclusion `success` across all 17 pipeline steps.
 
+---
+
+## Decision 26: Customer Identity Architecture, Channel Identity Mapping & Merge Invariants (Milestone 2 Slice 2.4)
+- **Status:** APPROVED & IMPLEMENTED
+- **Date:** 2026-11-18
+- **Context:**
+  Milestone 2 Slice 2.4 introduces Customer Identity and Profiles to Project Orbit. In an omnichannel customer engagement platform, customers reach businesses through disparate channels (WhatsApp phone number, Instagram scoped ID, Web Chat visitor token).
+  A customer record must unite these channel identities, maintain conversation history, support verified identity linking, and preserve an immutable audit trail when identities are merged.
+- **Architectural Specifications & Core Invariants:**
+  1. **Strict Multi-Tenant Scoping (PostgreSQL RLS & Composite Keys):**
+     - `customers`, `customer_channel_identities`, and `customer_merge_audits` are Category A tenant-domain tables.
+     - Row Level Security (RLS) is enabled and forced (`FORCE ROW LEVEL SECURITY`).
+     - Composite primary/unique keys `(id, organizationId)` and composite foreign keys guarantee that all channel identities, merge audits, and customer references cannot span across tenant boundaries.
+  2. **Channel Identity Mapping Model (`customer_channel_identities`):**
+     - Decouples external channel identifiers (`externalId`, e.g. E.164 phone number, Meta user ID, Web visitor session) from the internal `Customer` entity.
+     - Enforces `UNIQUE(channel_id, external_id)` so an external identity cannot point to multiple customers within the same channel.
+     - Tracks `verified` boolean indicating whether the external identifier was cryptographically or OTP-verified.
+  3. **Strict Display-Name Collision Defense Invariant:**
+     - Explicit prompt contract: **Never merge identities based only on matching display names.**
+     - Common names (e.g., "John Smith", "Maria") across different channels MUST remain distinct customer entities by default.
+     - Automatic linking is permitted strictly when an authoritative, verified identifier (e.g. verified E.164 phone or verified email address) matches.
+     - Manual merging requires authorized agent action, logging the operator ID and justification.
+  4. **Immutable Audit Trail for Identity Merges (`customer_merge_audits`):**
+     - When Customer B (source) is merged into Customer A (target):
+       - Source customer is marked `merged_into_id = targetCustomerId`.
+       - All channel identities belonging to source are re-parented to target.
+       - All conversations referencing source are re-parented to target.
+       - A `CustomerMergeAudit` row is created storing `sourceCustomerId`, `targetCustomerId`, `performedByUserId`, `reason`, and a JSON snapshot of the source customer's state prior to merge.
+  5. **Conversation Relationship:**
+     - `conversations` table is extended with nullable `customer_id UUID`, governed by composite foreign key `(customer_id, organization_id) REFERENCES customers(id, organization_id) ON DELETE RESTRICT`.
+- **Evidence & Verification:**
+  - Database Migration: `20261118000000_customer_identities` created `customers`, `customer_channel_identities`, and `customer_merge_audits` tables with forced Row Level Security (RLS) and `orbit_app` least-privilege grants.
+  - 13 comprehensive integration tests in `tests/integration/customers.spec.ts` covering CRUD, tenant isolation, channel identity mapping, display-name collision defense, verified linking, merge re-parenting, and audit logging.
+  - Full test suite: 165/165 tests passing across all 14 suites.
+  - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `vite build` (build) exit code 0.
+
+
+
 

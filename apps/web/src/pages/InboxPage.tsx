@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { ConversationSummary, MessageSummary, ChannelSummary } from '@orbit/shared';
+import { CustomerProfilePane } from '../components/CustomerProfilePane';
 
 export const InboxPage: React.FC = () => {
   const { user, activeOrg } = useAuth();
@@ -31,6 +32,7 @@ export const InboxPage: React.FC = () => {
   const [selectedChannelId, setSelectedChannelId] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [replyContent, setReplyContent] = useState('');
+  const [isProfilePaneOpen, setIsProfilePaneOpen] = useState(true);
   const [isNewConvModalOpen, setIsNewConvModalOpen] = useState(false);
   const [newConvChannelId, setNewConvChannelId] = useState('');
   const [newConvTitle, setNewConvTitle] = useState('');
@@ -321,9 +323,16 @@ export const InboxPage: React.FC = () => {
                   >
                     {/* Card Top: Title & Status */}
                     <div className="flex items-start justify-between gap-2">
-                      <span className="font-semibold text-xs text-slate-900 truncate">
-                        {conv.title || 'Conversation ' + conv.id.slice(0, 8)}
-                      </span>
+                      <div className="min-w-0">
+                        <span className="font-semibold text-xs text-slate-900 truncate block">
+                          {conv.title || 'Conversation ' + conv.id.slice(0, 8)}
+                        </span>
+                        {conv.customer?.name && (
+                          <span className="text-[10px] text-indigo-600 font-medium truncate block">
+                            👤 {conv.customer.name}
+                          </span>
+                        )}
+                      </div>
                       {getStatusBadge(conv.status)}
                     </div>
 
@@ -385,48 +394,64 @@ export const InboxPage: React.FC = () => {
               <p className="text-xs text-slate-500">It may have been deleted or belongs to another organization.</p>
             </div>
           ) : (
-            /* Active Thread View */
-            <div className="flex-1 flex flex-col h-full overflow-hidden bg-white">
-              {/* Thread Header */}
-              <div className="px-6 py-4 border-b border-slate-200 bg-white flex items-center justify-between shrink-0">
-                <div className="space-y-1">
-                  <div className="flex items-center space-x-2">
-                    <h2 className="text-base font-bold text-slate-900">
-                      {activeConversation.title || `Conversation ${activeConversation.id.slice(0, 8)}`}
-                    </h2>
-                    {getStatusBadge(activeConversation.status)}
+            /* Active Thread View with Customer Profile Side Pane */
+            <div className="flex-1 flex h-full overflow-hidden bg-white">
+              <div className="flex-1 flex flex-col h-full overflow-hidden">
+                {/* Thread Header */}
+                <div className="px-6 py-4 border-b border-slate-200 bg-white flex items-center justify-between shrink-0">
+                  <div className="space-y-1">
+                    <div className="flex items-center space-x-2">
+                      <h2 className="text-base font-bold text-slate-900">
+                        {activeConversation.title || `Conversation ${activeConversation.id.slice(0, 8)}`}
+                      </h2>
+                      {getStatusBadge(activeConversation.status)}
+                    </div>
+                    <div className="flex items-center space-x-3 text-xs text-slate-500">
+                      <span className="flex items-center space-x-1">
+                        {getProviderIcon(activeConversation.channel?.provider)}
+                        <span>{activeConversation.channel?.name}</span>
+                      </span>
+                      <span>•</span>
+                      <span className="font-mono text-[11px] text-slate-400">
+                        ID: {activeConversation.id}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center space-x-3 text-xs text-slate-500">
-                    <span className="flex items-center space-x-1">
-                      {getProviderIcon(activeConversation.channel?.provider)}
-                      <span>{activeConversation.channel?.name}</span>
-                    </span>
-                    <span>•</span>
-                    <span className="font-mono text-[11px] text-slate-400">
-                      ID: {activeConversation.id}
-                    </span>
-                  </div>
-                </div>
 
-                {/* Status Controls */}
-                <div className="flex items-center space-x-2">
-                  <span className="text-xs font-medium text-slate-500">Status:</span>
-                  <select
-                    value={activeConversation.status}
-                    onChange={(e) =>
-                      updateStatusMutation.mutate(
-                        e.target.value as 'OPEN' | 'RESOLVED' | 'SNOOZED'
-                      )
-                    }
-                    disabled={updateStatusMutation.isPending}
-                    className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer disabled:opacity-50"
-                  >
-                    <option value="OPEN">Open</option>
-                    <option value="SNOOZED">Snooze</option>
-                    <option value="RESOLVED">Resolve</option>
-                  </select>
+                  {/* Header Actions */}
+                  <div className="flex items-center space-x-3">
+                    <button
+                      onClick={() => setIsProfilePaneOpen(!isProfilePaneOpen)}
+                      className={`inline-flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors ${
+                        isProfilePaneOpen
+                          ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                      }`}
+                      title="Toggle Customer Profile Panel"
+                    >
+                      <User className="w-3.5 h-3.5" />
+                      <span>{activeConversation.customer?.name || 'Customer Profile'}</span>
+                    </button>
+
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs font-medium text-slate-500">Status:</span>
+                      <select
+                        value={activeConversation.status}
+                        onChange={(e) =>
+                          updateStatusMutation.mutate(
+                            e.target.value as 'OPEN' | 'RESOLVED' | 'SNOOZED'
+                          )
+                        }
+                        disabled={updateStatusMutation.isPending}
+                        className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer disabled:opacity-50"
+                      >
+                        <option value="OPEN">Open</option>
+                        <option value="SNOOZED">Snooze</option>
+                        <option value="RESOLVED">Resolve</option>
+                      </select>
+                    </div>
+                  </div>
                 </div>
-              </div>
 
               {/* Message History Thread */}
               <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-50/60">
@@ -533,9 +558,20 @@ export const InboxPage: React.FC = () => {
                 </form>
               </div>
             </div>
-          )}
-        </div>
+
+            {/* Customer Profile Side Pane */}
+            {isProfilePaneOpen && (
+              <CustomerProfilePane
+                customer={activeConversation.customer}
+                activeOrgId={activeOrg?.id}
+                onSelectConversation={(convId) => setSelectedConvId(convId)}
+                onClose={() => setIsProfilePaneOpen(false)}
+              />
+            )}
+          </div>
+        )}
       </div>
+    </div>
 
       {/* ========================================================================= */}
       {/* MODAL: New Conversation                                                   */}

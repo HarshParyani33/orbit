@@ -90,29 +90,97 @@ model Channel {
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
 
-  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  routingLookups ChannelRoutingLookup[]
-  conversations  Conversation[]
+  organization       Organization              @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  routingLookups     ChannelRoutingLookup[]
+  conversations      Conversation[]
+  customerIdentities CustomerChannelIdentity[]
 
   @@unique([id, organizationId], name: "uq_channels_id_org")
   @@index([organizationId])
   @@map("channels")
 }
 
+model Customer {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  name           String    @db.VarChar(128)
+  email          String?   @db.VarChar(255)
+  phone          String?   @db.VarChar(64)
+  metadata       Json      @default("{}")
+  mergedIntoId   String?   @map("merged_into_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  mergedInto        Customer?                 @relation("CustomerMerges", fields: [mergedIntoId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  mergedFrom        Customer[]                @relation("CustomerMerges")
+  channelIdentities CustomerChannelIdentity[]
+  conversations     Conversation[]
+  sourceMerges      CustomerMergeAudit[]      @relation("SourceCustomerMerges")
+  targetMerges      CustomerMergeAudit[]      @relation("TargetCustomerMerges")
+
+  @@unique([id, organizationId], name: "uq_customers_id_org")
+  @@index([organizationId, email])
+  @@index([organizationId, phone])
+  @@index([organizationId, createdAt])
+  @@map("customers")
+}
+
+model CustomerChannelIdentity {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  customerId     String   @map("customer_id") @db.Uuid
+  channelId      String   @map("channel_id") @db.Uuid
+  provider       String   @db.VarChar(32)
+  externalId     String   @map("external_id") @db.VarChar(128)
+  verified       Boolean  @default(false)
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  customer Customer @relation(fields: [customerId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  channel  Channel  @relation(fields: [channelId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([channelId, externalId], name: "uq_channel_identities_channel_ext")
+  @@unique([id, organizationId], name: "uq_channel_identities_id_org")
+  @@index([organizationId, customerId])
+  @@map("customer_channel_identities")
+}
+
+model CustomerMergeAudit {
+  id                String   @id @default(uuid()) @db.Uuid
+  organizationId    String   @map("organization_id") @db.Uuid
+  sourceCustomerId  String   @map("source_customer_id") @db.Uuid
+  targetCustomerId  String   @map("target_customer_id") @db.Uuid
+  performedByUserId String?  @map("performed_by_user_id") @db.Uuid
+  reason            String   @db.VarChar(255)
+  snapshot          Json     @default("{}")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  sourceCustomer Customer @relation("SourceCustomerMerges", fields: [sourceCustomerId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  targetCustomer Customer @relation("TargetCustomerMerges", fields: [targetCustomerId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@index([organizationId, targetCustomerId])
+  @@index([organizationId, sourceCustomerId])
+  @@map("customer_merge_audits")
+}
+
 model Conversation {
   id             String   @id @default(uuid()) @db.Uuid
   organizationId String   @map("organization_id") @db.Uuid
   channelId      String   @map("channel_id") @db.Uuid
+  customerId     String?  @map("customer_id") @db.Uuid
   status         String   @default("OPEN") @db.VarChar(24) // OPEN, RESOLVED, SNOOZED
   title          String?  @db.VarChar(255)
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
 
   channel  Channel   @relation(fields: [channelId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  customer Customer? @relation(fields: [customerId, organizationId], references: [id, organizationId], onDelete: Restrict)
   messages Message[]
 
   @@unique([id, organizationId], name: "uq_conversations_id_org")
   @@index([organizationId, status])
+  @@index([organizationId, customerId])
   @@map("conversations")
 }
 

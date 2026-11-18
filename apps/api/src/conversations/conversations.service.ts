@@ -37,6 +37,10 @@ export class ConversationsService {
         where.channelId = query.channelId;
       }
 
+      if (query.customerId) {
+        where.customerId = query.customerId;
+      }
+
       const conversations = await tx.conversation.findMany({
         where,
         take: query.limit,
@@ -49,6 +53,14 @@ export class ConversationsService {
               id: true,
               name: true,
               provider: true,
+            },
+          },
+          customer: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
             },
           },
           messages: {
@@ -80,6 +92,18 @@ export class ConversationsService {
               provider: true,
             },
           },
+          customer: {
+            include: {
+              channelIdentities: {
+                select: {
+                  id: true,
+                  provider: true,
+                  externalId: true,
+                  verified: true,
+                },
+              },
+            },
+          },
           messages: {
             orderBy: { createdAt: 'asc' },
           },
@@ -109,10 +133,24 @@ export class ConversationsService {
         throw new BadRequestException('Channel not found or does not belong to active organization');
       }
 
+      if (data.customerId) {
+        const customer = await tx.customer.findFirst({
+          where: {
+            id: data.customerId,
+            organizationId,
+            mergedIntoId: null,
+          },
+        });
+        if (!customer) {
+          throw new BadRequestException('Customer not found or does not belong to active organization');
+        }
+      }
+
       const conversation = await tx.conversation.create({
         data: {
           organizationId,
           channelId: data.channelId,
+          customerId: data.customerId || null,
           status: 'OPEN',
           title: data.title || null,
         },
@@ -122,6 +160,14 @@ export class ConversationsService {
               id: true,
               name: true,
               provider: true,
+            },
+          },
+          customer: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
             },
           },
         },
