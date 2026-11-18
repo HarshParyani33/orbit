@@ -38,6 +38,7 @@ export const envSchema = z
     // Webhook Secrets
     META_APP_SECRET: z.string().optional(),
     META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
+    STRIPE_WEBHOOK_SECRET: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     const isProd = data.NODE_ENV === 'production';
@@ -126,6 +127,9 @@ export const envSchema = z
       if (!data.META_WEBHOOK_VERIFY_TOKEN || data.META_WEBHOOK_VERIFY_TOKEN.trim().length === 0) {
         data.META_WEBHOOK_VERIFY_TOKEN = 'dev_meta_verify_token';
       }
+      if (!data.STRIPE_WEBHOOK_SECRET || data.STRIPE_WEBHOOK_SECRET.trim().length === 0) {
+        data.STRIPE_WEBHOOK_SECRET = 'whsec_test_secret_32_characters_minimum_testing';
+      }
     }
   });
 
@@ -135,6 +139,7 @@ export type EnvConfig = z.infer<typeof envSchema> & {
   WIDGET_JWT_SECRET: string;
   META_APP_SECRET: string;
   META_WEBHOOK_VERIFY_TOKEN: string;
+  STRIPE_WEBHOOK_SECRET: string;
 };
 
 let parsedConfig: EnvConfig | null = null;

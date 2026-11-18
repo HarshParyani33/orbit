@@ -17,8 +17,10 @@ import { IngressDatabaseService } from './ingress-database.service';
 import { WebhookOutboxService } from './webhook-outbox.service';
 import { WhatsAppIngestionService } from './whatsapp-ingestion.service';
 import { InstagramIngestionService } from './instagram-ingestion.service';
+import { StripeIngestionService } from './stripe-ingestion.service';
 import { MetaSignatureGuard } from './guards/meta-signature.guard';
-import { Optional } from '@nestjs/common';
+import { StripeSignatureGuard } from './guards/stripe-signature.guard';
+import { Optional, Inject } from '@nestjs/common';
 import * as crypto from 'crypto';
 
 @Controller('api/webhooks')
@@ -26,10 +28,11 @@ export class WebhooksController {
   private readonly logger = new Logger(WebhooksController.name);
 
   constructor(
-    private readonly ingressDb: IngressDatabaseService,
-    private readonly outboxService: WebhookOutboxService,
-    @Optional() private readonly whatsAppIngestion?: WhatsAppIngestionService,
-    @Optional() private readonly instagramIngestion?: InstagramIngestionService
+    @Inject(IngressDatabaseService) private readonly ingressDb: IngressDatabaseService,
+    @Inject(WebhookOutboxService) private readonly outboxService: WebhookOutboxService,
+    @Optional() @Inject(WhatsAppIngestionService) private readonly whatsAppIngestion?: WhatsAppIngestionService,
+    @Optional() @Inject(InstagramIngestionService) private readonly instagramIngestion?: InstagramIngestionService,
+    @Optional() @Inject(StripeIngestionService) private readonly stripeIngestion?: StripeIngestionService
   ) {}
 
   /**
@@ -207,6 +210,23 @@ export class WebhooksController {
     }
 
     return { status: 'success', received: true };
+  }
+
+  /**
+   * Stripe Webhook Ingestion Endpoint.
+   * Cryptographically authenticated via StripeSignatureGuard.
+   */
+  @Post('stripe')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(StripeSignatureGuard)
+  async handleStripeWebhook(@Body() payload: any) {
+    if (!this.stripeIngestion) {
+      this.logger.warn('StripeIngestionService is unconfigured');
+      return { status: 'skipped', received: true };
+    }
+
+    const result = await this.stripeIngestion.handleStripeEvent(payload);
+    return { status: 'success', ...result };
   }
 
   /**

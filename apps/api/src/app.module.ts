@@ -36,6 +36,10 @@ import { InstagramIngestionService } from './webhooks/instagram-ingestion.servic
 import { MetaSignatureGuard } from './webhooks/guards/meta-signature.guard';
 import { AttachmentsService } from './attachments/attachments.service';
 import { AttachmentsController } from './attachments/attachments.controller';
+import { BillingService } from './billing/billing.service';
+import { BillingController } from './billing/billing.controller';
+import { StripeIngestionService } from './webhooks/stripe-ingestion.service';
+import { StripeSignatureGuard } from './webhooks/guards/stripe-signature.guard';
 
 @Module({
   imports: [
@@ -62,6 +66,7 @@ import { AttachmentsController } from './attachments/attachments.controller';
     AnalyticsController,
     WebhooksController,
     AttachmentsController,
+    BillingController,
   ],
   providers: [
     PrismaService,
@@ -70,6 +75,7 @@ import { AttachmentsController } from './attachments/attachments.controller';
     JwtAuthGuard,
     WidgetGuard,
     MetaSignatureGuard,
+    StripeSignatureGuard,
     CsrfGuard,
     {
       provide: APP_GUARD,
@@ -90,6 +96,8 @@ import { AttachmentsController } from './attachments/attachments.controller';
     WhatsAppIngestionService,
     InstagramIngestionService,
     AttachmentsService,
+    BillingService,
+    StripeIngestionService,
   ],
   exports: [
     PrismaService,
@@ -109,6 +117,8 @@ import { AttachmentsController } from './attachments/attachments.controller';
     WhatsAppIngestionService,
     InstagramIngestionService,
     AttachmentsService,
+    BillingService,
+    StripeIngestionService,
   ],
 })
 export class AppModule { }

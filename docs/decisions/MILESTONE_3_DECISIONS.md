@@ -192,3 +192,55 @@ This document records the architectural and engineering decisions for **Mileston
   - Full test suite: 242/242 tests passing across all 21 suites.
   - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
   - **GitHub Actions CI Verification:** [CI Run #44331187274](https://github.com/HarshParyani33/orbit/actions/runs/44331187274) completed with conclusion `success` across all 17 pipeline steps.
+
+---
+
+## Decision 34: Commercial Billing Foundation & Stripe Webhook Ingestion (Milestone 3 Slice 3.5)
+
+- **Status:** APPROVED & IN IMPLEMENTATION
+- **Date:** 2026-11-18
+- **Context:**
+  Milestone 3 Slice 3.5 introduces the commercial billing foundation, multi-tenant subscription ledger, and Stripe webhook ingestion to Project Orbit.
+  Per `docs/PROJECT_CONTEXT.md` Section 8 (`subscriptions`) and `docs/ARCHITECTURE.md` Section 6.1 & 7.1:
+  1. Each tenant organization maintains a commercial subscription record governing its plan tier (`FREE`, `STARTER`, `PRO`, `ENTERPRISE`), seat allocations, AI token quotas, and active billing status.
+  2. Stripe webhook events arriving at `POST /api/webhooks/stripe` must be authenticated cryptographically via `Stripe-Signature` (`t=<timestamp>,v1=<signature>`) with replay tolerance (300 seconds) using constant-time comparison before processing.
+  3. Stripe events (`customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_succeeded`, `invoice.payment_failed`) must be recorded idempotently into the transactional outbox (`webhook_events`) and processed inside tenant context.
+  4. Multi-tenant Row-Level Security (RLS) must enforce that tenant subscriptions are strictly isolated and queryable only within the active tenant context.
+  5. The API must provide authenticated billing status endpoints (`GET /api/billing/subscription`) with proper organization membership guardrails.
+
+- **Architectural Specifications & Invariants:**
+  1. **Database Schema & RLS:**
+     - `subscriptions` table with `id`, `organization_id`, `stripe_customer_id`, `stripe_subscription_id`, `plan_tier`, `status`, `current_period_start`, `current_period_end`, `cancel_at_period_end`, `seat_limit`, `ai_token_allowance`, `created_at`, `updated_at`.
+     - Unique constraints: `uq_subscriptions_id_org UNIQUE (id, organization_id)`, `uq_subscriptions_org UNIQUE (organization_id)`.
+     - Foreign key referencing `organizations(id)` with `ON DELETE RESTRICT` (retained for statutory tax and audit requirements).
+     - PostgreSQL RLS policy `tenant_isolation_subscriptions` enforcing `organization_id = NULLIF(current_setting('app.current_org_id', true), '')::UUID` for `orbit_app`.
+  2. **Stripe Signature Guard (`StripeSignatureGuard`):**
+     - Parses `Stripe-Signature` header: extracts `t` and `v1`.
+     - Validates `abs(Date.now()/1000 - t) <= 300` to prevent replay attacks.
+     - Computes HMAC-SHA256 of `${t}.${rawBody.toString('utf8')}` using `STRIPE_WEBHOOK_SECRET`.
+     - Constant-time verification using `crypto.timingSafeEqual`.
+  3. **Stripe Ingestion & Billing Service (`apps/api`):**
+     - `StripeIngestionService`:
+       - Dispatches inbound Stripe events through `WebhookOutboxService`.
+       - Handles subscription lifecycle updates (`ACTIVE`, `TRIALING`, `PAST_DUE`, `CANCELED`).
+       - Updates plan tier, seat limits, and AI token allowances per tier:
+         - `FREE`: 2 seats, 25,000 AI tokens/month.
+         - `STARTER`: 5 seats, 100,000 AI tokens/month.
+         - `PRO`: 15 seats, 500,000 AI tokens/month.
+         - `ENTERPRISE`: 100 seats, 5,000,000 AI tokens/month.
+     - `BillingService`:
+       - `getSubscription(organizationId: string)`: returns subscription details with plan limits.
+       - `updateSubscriptionPlan(organizationId: string, planTier: string)`: admin mutation for plan upgrades.
+  4. **Billing API (`BillingController`):**
+     - `GET /api/billing/subscription`: protected by `JwtAuthGuard` and `TenantGuard`.
+
+- **Evidence & Verification Plan:**
+  - Database migration `20261118000006_subscriptions` applied and RLS verified.
+  - Automated integration tests in `tests/integration/stripe-billing.spec.ts` covering:
+    - Cryptographic Stripe signature verification and rejection of forged signatures or expired timestamps.
+    - Idempotent Stripe webhook event ingestion and transactional outbox recording.
+    - Subscription lifecycle transitions (`customer.subscription.created`, `updated`, `deleted`).
+    - Payment failure handling transitioning status to `PAST_DUE`.
+    - Plan tier limits enforcement and quota synchronization.
+    - Multi-tenant RLS isolation: Tenant B cannot access or view Tenant A's subscription.
+    - Authenticated `GET /api/billing/subscription` endpoint contract verification.

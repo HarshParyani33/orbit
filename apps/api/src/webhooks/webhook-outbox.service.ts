@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantTransactionRunner } from '../tenancy/tenant-transaction-runner';
 import * as crypto from 'crypto';
@@ -13,8 +13,8 @@ export class WebhookOutboxService {
   private readonly logger = new Logger(WebhookOutboxService.name);
 
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly tenantRunner: TenantTransactionRunner
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(TenantTransactionRunner) private readonly tenantRunner: TenantTransactionRunner
   ) {}
 
   /**

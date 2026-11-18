@@ -58,6 +58,7 @@ model Organization {
   automationRules    AutomationRule[]
   webhookEvents      WebhookEvent[]
   messageAttachments MessageAttachment[]
+  subscription       Subscription?
 
   @@map("organizations")
 }
@@ -421,6 +422,30 @@ model WebhookEvent {
   @@index([processingStatus, leaseExpiresAt, nextRetryAt], name: "idx_webhook_processing_sweeper")
   @@index([organizationId, createdAt], name: "idx_webhook_org_created")
   @@map("webhook_events")
+}
+
+model Subscription {
+  id                   String   @id @default(uuid()) @db.Uuid
+  organizationId       String   @unique @map("organization_id") @db.Uuid
+  stripeCustomerId     String?  @map("stripe_customer_id") @db.VarChar(128)
+  stripeSubscriptionId String?  @unique @map("stripe_subscription_id") @db.VarChar(128)
+  planTier             String   @default("FREE") @map("plan_tier") @db.VarChar(32)
+  status               String   @default("ACTIVE") @db.VarChar(32)
+  currentPeriodStart   DateTime @default(now()) @map("current_period_start") @db.Timestamptz()
+  currentPeriodEnd     DateTime @default(dbgenerated("(CURRENT_TIMESTAMP + '30 days'::interval)")) @map("current_period_end") @db.Timestamptz()
+  cancelAtPeriodEnd    Boolean  @default(false) @map("cancel_at_period_end")
+  seatLimit            Int      @default(5) @map("seat_limit")
+  aiTokenAllowance     Int      @default(100000) @map("ai_token_allowance")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt            DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@unique([id, organizationId], name: "uq_subscriptions_id_org")
+  @@index([organizationId])
+  @@index([stripeCustomerId])
+  @@index([status])
+  @@map("subscriptions")
 }
 
 
