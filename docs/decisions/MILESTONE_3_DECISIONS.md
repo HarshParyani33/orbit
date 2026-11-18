@@ -197,7 +197,7 @@ This document records the architectural and engineering decisions for **Mileston
 
 ## Decision 34: Commercial Billing Foundation & Stripe Webhook Ingestion (Milestone 3 Slice 3.5)
 
-- **Status:** APPROVED & IN IMPLEMENTATION
+- **Status:** APPROVED & VERIFIED (Commit `ac7b6e5`, CI Run `44334925807`)
 - **Date:** 2026-11-18
 - **Context:**
   Milestone 3 Slice 3.5 introduces the commercial billing foundation, multi-tenant subscription ledger, and Stripe webhook ingestion to Project Orbit.
@@ -234,9 +234,9 @@ This document records the architectural and engineering decisions for **Mileston
   4. **Billing API (`BillingController`):**
      - `GET /api/billing/subscription`: protected by `JwtAuthGuard` and `TenantGuard`.
 
-- **Evidence & Verification Plan:**
+- **Evidence & Verification:**
   - Database migration `20261118000006_subscriptions` applied and RLS verified.
-  - Automated integration tests in `tests/integration/stripe-billing.spec.ts` covering:
+  - Automated integration tests in `tests/integration/stripe-billing.spec.ts` (11 tests) verifying:
     - Cryptographic Stripe signature verification and rejection of forged signatures or expired timestamps.
     - Idempotent Stripe webhook event ingestion and transactional outbox recording.
     - Subscription lifecycle transitions (`customer.subscription.created`, `updated`, `deleted`).
@@ -244,3 +244,6 @@ This document records the architectural and engineering decisions for **Mileston
     - Plan tier limits enforcement and quota synchronization.
     - Multi-tenant RLS isolation: Tenant B cannot access or view Tenant A's subscription.
     - Authenticated `GET /api/billing/subscription` endpoint contract verification.
+  - Full test suite: 253/253 tests passing across all 22 suites.
+  - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `npm run build` (build for all 9 workspaces) exit code 0.
+  - **GitHub Actions CI Verification:** [CI Run #44334925807](https://github.com/HarshParyani33/orbit/actions/runs/44334925807) completed with conclusion `success` across all 17 pipeline steps.
