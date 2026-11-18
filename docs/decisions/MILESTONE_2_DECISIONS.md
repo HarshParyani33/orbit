@@ -98,4 +98,6 @@ This document records the architectural and engineering decisions for **Mileston
   - 12 comprehensive integration tests in `tests/integration/realtime-gateway.spec.ts` covering handshake authentication, forged token rejection, cross-tenant isolation, conversation room authorization, and dynamic switching.
   - Full test suite: 152/152 tests passing across 13 suites.
   - Local quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `vite build` (build) exit code 0.
+  - **GitHub Actions CI Verification:** [CI Run #44293770597](https://github.com/HarshParyani33/orbit/actions/runs/44293770597) completed with conclusion `success` across all 17 pipeline steps.
+
 
