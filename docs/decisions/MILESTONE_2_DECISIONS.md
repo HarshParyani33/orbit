@@ -135,6 +135,8 @@ This document records the architectural and engineering decisions for **Mileston
   - 13 comprehensive integration tests in `tests/integration/customers.spec.ts` covering CRUD, tenant isolation, channel identity mapping, display-name collision defense, verified linking, merge re-parenting, and audit logging.
   - Full test suite: 165/165 tests passing across all 14 suites.
   - Quality gates: `tsc --build` (typecheck), `eslint .` (lint), and `vite build` (build) exit code 0.
+  - **GitHub Actions CI Verification:** [CI Run #44297005128](https://github.com/HarshParyani33/orbit/actions/runs/44297005128) completed with conclusion `success` across all 17 pipeline steps.
+
 
 
 
