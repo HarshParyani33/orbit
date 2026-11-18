@@ -1,8 +1,13 @@
 import React from 'react';
 import { useAuth } from '../context/auth-context';
-import { Building2, LogOut, ChevronDown, UserCircle2 } from 'lucide-react';
+import { Building2, LogOut, UserCircle2, Inbox, Layers } from 'lucide-react';
 
-export const Navbar: React.FC = () => {
+interface NavbarProps {
+  activeTab: 'inbox' | 'channels';
+  onSelectTab: (tab: 'inbox' | 'channels') => void;
+}
+
+export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
   const { user, organizations, activeOrg, switchOrganization, logout } = useAuth();
 
   return (
@@ -15,6 +20,32 @@ export const Navbar: React.FC = () => {
             </div>
             <span className="font-bold text-lg text-slate-900 tracking-tight">Project Orbit</span>
           </div>
+
+          {/* Navigation Tabs */}
+          <nav className="hidden sm:flex items-center space-x-1 border-l border-slate-200 pl-6">
+            <button
+              onClick={() => onSelectTab('inbox')}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                activeTab === 'inbox'
+                  ? 'bg-indigo-50 text-indigo-700'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <Inbox className="w-4 h-4" />
+              <span>Inbox</span>
+            </button>
+            <button
+              onClick={() => onSelectTab('channels')}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                activeTab === 'channels'
+                  ? 'bg-indigo-50 text-indigo-700'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <Layers className="w-4 h-4" />
+              <span>Channels & Settings</span>
+            </button>
+          </nav>
 
           {/* Organization Switcher Dropdown */}
           {organizations.length > 0 && activeOrg && (

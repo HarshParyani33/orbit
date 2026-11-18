@@ -3,11 +3,13 @@ import { useAuth } from './context/auth-context';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { InboxPage } from './pages/InboxPage';
 import { Navbar } from './components/Navbar';
 
 export const App: React.FC = () => {
   const { user, isLoading } = useAuth();
   const [authView, setAuthView] = useState<'login' | 'register'>('login');
+  const [activeTab, setActiveTab] = useState<'inbox' | 'channels'>('inbox');
 
   if (isLoading) {
     return (
@@ -29,9 +31,9 @@ export const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
-      <Navbar />
+      <Navbar activeTab={activeTab} onSelectTab={setActiveTab} />
       <main className="flex-1">
-        <DashboardPage />
+        {activeTab === 'inbox' ? <InboxPage /> : <DashboardPage />}
       </main>
     </div>
   );

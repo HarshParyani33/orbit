@@ -38,3 +38,32 @@ This document records the architectural and engineering decisions for **Mileston
       - Strict tenant isolation: Tenant A attempting to read, update, or post messages in Tenant B's conversation fails closed (404 / 0 rows / RLS violation).
       - Status lifecycle transitions (`OPEN` -> `SNOOZED` -> `RESOLVED` -> `OPEN`).
       - Foreign key tenant boundary verification: attempting to create a conversation referencing a channel from another tenant fails with foreign key / RLS violation.
+
+---
+
+## Decision 24: Agent Inbox UI Architecture & Real-Time Sync Foundation (Slice 2.2)
+
+- **Status:** APPROVED & IMPLEMENTED
+- **Date:** 2026-11-18
+- **Context:**
+  Support agents require a unified, responsive, split-pane dashboard to triage, filter, view, and reply to customer inquiries across multi-tenant channels without page reloads or layout shift.
+  The inbox must satisfy:
+  1. Split-pane layout: Master conversation list on the left (with real-time status chips, channel indicators, last message preview, search, status filter, and channel filter) and detail/thread viewer on the right.
+  2. Message thread viewer: Chronological messages displaying sender types (`CUSTOMER`, `AGENT`, `AI`, `SYSTEM`) with distinct visual treatments.
+  3. Action controls: Agent reply composer (with Enter-to-send or button), status toggle (`OPEN`, `SNOOZED`, `RESOLVED`), and refresh.
+  4. State handling: Full support for loading spinners, error banners, empty search states, and 'no conversation selected' empty states.
+  5. Multi-Tenant isolation: Queries and mutations automatically carry active `X-Organization-ID` via `apiRequest`. When switching organizations in the top navbar, the inbox queries invalidate and immediately reload conversations for the new tenant.
+
+- **Decision:**
+  - **24.1 Component Architecture:**
+    - `InboxPage.tsx`: Top-level inbox container orchestrating selected conversation ID, search filter, status filter, and channel filter.
+    - Master pane: Real-time search by conversation title or customer message, filter pills for `ALL`, `OPEN`, `SNOOZED`, `RESOLVED`, and channel dropdown.
+    - Detail pane: Conversation header with status changer (`OPEN`, `SNOOZED`, `RESOLVED`), channel provider pill, message thread with auto-scroll to bottom, and agent response composer.
+    - New Conversation Modal: Allows agents to initiate an outbound conversation on a selected channel with an initial message.
+  - **24.2 Query & Cache Lifecycle:**
+    - Uses TanStack Query (`useQuery`, `useMutation`, `useQueryClient`).
+    - Cache keys: `['conversations', activeOrg?.id, statusFilter, channelFilter]`, `['conversation', activeOrg?.id, selectedId]`.
+    - On status update or new message creation, optimistic or fast cache invalidation refetches the thread and conversation list.
+  - **24.3 Navigation Integration:**
+    - Extend `Navbar.tsx` with view tabs (`Inbox` and `Channels & Settings`).
+    - Extend `App.tsx` to switch seamlessly between `InboxPage` and `DashboardPage`.
