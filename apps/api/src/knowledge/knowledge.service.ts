@@ -11,6 +11,7 @@ import { TenantTransactionRunner } from '../tenancy/tenant-transaction-runner';
 import {
   IEmbeddingProvider,
   MockEmbeddingProvider,
+  OpenAiEmbeddingProvider,
   ChunkingEngine,
 } from '@orbit/integrations';
 import {
@@ -71,7 +72,14 @@ export class KnowledgeService {
     @Inject(TenantTransactionRunner)
     private readonly tenantRunner: TenantTransactionRunner,
   ) {
-    this.embeddingProvider = new MockEmbeddingProvider(1536);
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (apiKey && apiKey.trim().length > 0 && apiKey !== 'mock-key') {
+      this.embeddingProvider = new OpenAiEmbeddingProvider(apiKey, 'text-embedding-3-small', 1536);
+      this.logger.log('KnowledgeService initialized with production OpenAiEmbeddingProvider (text-embedding-3-small).');
+    } else {
+      this.embeddingProvider = new MockEmbeddingProvider(1536);
+      this.logger.log('KnowledgeService initialized with MockEmbeddingProvider (non-production/test mode).');
+    }
   }
 
   public setEmbeddingProvider(provider: IEmbeddingProvider): void {

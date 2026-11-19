@@ -5,11 +5,14 @@ import {
   Inject,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
+import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { TokenService } from './token.service';
 import {
   RegisterInput,
   LoginInput,
+  ForgotPasswordInput,
+  ResetPasswordInput,
 } from '@orbit/validation';
 import {
   AuthTokenResponse,
@@ -410,5 +413,107 @@ export class AuthService {
         data: { isRevoked: true },
       });
     });
+  }
+
+  /**
+   * Initiates password recovery flow. Generates a cryptographically random token,
+   * hashes it, and persists in UserSession with a 1-hour expiry.
+   */
+  async forgotPassword(input: ForgotPasswordInput): Promise<{
+    success: boolean;
+    message: string;
+    resetToken?: string;
+  }> {
+    const email = input.email.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user || user.status !== 'ACTIVE') {
+      return {
+        success: true,
+        message: 'If an account exists with this email address, a password reset link has been dispatched.',
+      };
+    }
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = 'reset:' + crypto.createHash('sha256').update(rawToken).digest('hex');
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    await this.prisma.userSession.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        familyId: '00000000-0000-0000-0000-000000000000',
+        isRevoked: false,
+        expiresAt,
+      },
+    });
+
+    console.log(`[AuthService] Password reset token generated for ${email}`);
+
+    return {
+      success: true,
+      message: 'If an account exists with this email address, a password reset link has been dispatched.',
+      resetToken: process.env.NODE_ENV !== 'production' ? rawToken : undefined,
+    };
+  }
+
+  /**
+   * Completes password reset flow. Validates token, hashes new password with Argon2id,
+   * and revokes ALL active sessions for the user to guarantee security.
+   */
+  async resetPassword(input: ResetPasswordInput): Promise<{
+    success: boolean;
+    message: string;
+  }> {
+    const tokenHash = 'reset:' + crypto.createHash('sha256').update(input.token).digest('hex');
+
+    const session = await this.prisma.userSession.findFirst({
+      where: {
+        tokenHash,
+        isRevoked: false,
+        expiresAt: { gt: new Date() },
+      },
+      include: { user: true },
+    });
+
+    if (!session || !session.user || session.user.status !== 'ACTIVE') {
+      throw new UnauthorizedException('Invalid or expired password reset token');
+    }
+
+    const passwordHash = await argon2.hash(input.newPassword, {
+      type: argon2.argon2id,
+      memoryCost: 65536,
+      timeCost: 3,
+    });
+
+    await this.prisma.$transaction(async (tx) => {
+      // 1. Update user password
+      await tx.user.update({
+        where: { id: session.userId },
+        data: { passwordHash },
+      });
+
+      // 2. Revoke the used reset token
+      await tx.userSession.update({
+        where: { id: session.id },
+        data: { isRevoked: true },
+      });
+
+      // 3. Revoke all other active sessions for this user (security invariant)
+      await tx.userSession.updateMany({
+        where: {
+          userId: session.userId,
+          isRevoked: false,
+        },
+        data: { isRevoked: true },
+      });
+    });
+
+    return {
+      success: true,
+      message: 'Password has been updated successfully. All previous sessions have been signed out.',
+    };
   }
 }

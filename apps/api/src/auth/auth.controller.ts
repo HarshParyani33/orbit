@@ -14,17 +14,23 @@ import { Response, Request } from 'express';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './auth.guard';
 import { CurrentUser, RequestUser } from './current-user.decorator';
+import { RateLimit, RateLimitGuard } from './rate-limit.guard';
 import {
   registerSchema,
   loginSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
   RegisterInput,
   LoginInput,
+  ForgotPasswordInput,
+  ResetPasswordInput,
 } from '@orbit/validation';
 import { ApiResponse } from '@orbit/shared';
 
 const isProduction = process.env.NODE_ENV === 'production';
 
 @Controller('api/auth')
+@UseGuards(RateLimitGuard)
 export class AuthController {
   constructor(@Inject(AuthService) private readonly authService: AuthService) {}
 
@@ -52,6 +58,7 @@ export class AuthController {
   }
 
   @Post('register')
+  @RateLimit({ maxRequests: 5, windowMs: 60000, keyPrefix: 'auth_reg' })
   async register(
     @Body() body: RegisterInput,
     @Res({ passthrough: true }) res: Response
@@ -69,6 +76,7 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @RateLimit({ maxRequests: 5, windowMs: 60000, keyPrefix: 'auth_login' })
   async login(
     @Body() body: LoginInput,
     @Res({ passthrough: true }) res: Response
@@ -86,6 +94,7 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
+  @RateLimit({ maxRequests: 30, windowMs: 60000, keyPrefix: 'auth_refresh' })
   async refresh(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response
@@ -117,6 +126,30 @@ export class AuthController {
     };
   }
 
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  @RateLimit({ maxRequests: 5, windowMs: 60000, keyPrefix: 'auth_forgot' })
+  async forgotPassword(@Body() body: ForgotPasswordInput): Promise<ApiResponse> {
+    const validated = forgotPasswordSchema.parse(body);
+    const result = await this.authService.forgotPassword(validated);
+    return {
+      success: true,
+      data: result,
+    };
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  @RateLimit({ maxRequests: 5, windowMs: 60000, keyPrefix: 'auth_reset' })
+  async resetPassword(@Body() body: ResetPasswordInput): Promise<ApiResponse> {
+    const validated = resetPasswordSchema.parse(body);
+    const result = await this.authService.resetPassword(validated);
+    return {
+      success: true,
+      data: result,
+    };
+  }
+
   @Get('me')
   @UseGuards(JwtAuthGuard)
   async me(@CurrentUser() user: RequestUser): Promise<ApiResponse> {
@@ -127,3 +160,4 @@ export class AuthController {
     };
   }
 }
+

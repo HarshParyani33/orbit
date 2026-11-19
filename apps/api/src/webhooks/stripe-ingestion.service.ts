@@ -35,12 +35,15 @@ export class StripeIngestionService {
   async resolveOrganizationId(event: StripeEvent): Promise<string | null> {
     const obj = event.data.object;
 
-    // 1. Check direct metadata on object
+    // 1. Check direct metadata on object or child lines
     if (obj.metadata && typeof obj.metadata.organization_id === 'string') {
       return obj.metadata.organization_id;
     }
     if (typeof obj.client_reference_id === 'string' && obj.client_reference_id) {
       return obj.client_reference_id;
+    }
+    if (obj.lines?.data?.[0]?.metadata?.organization_id) {
+      return obj.lines.data[0].metadata.organization_id;
     }
 
     // 2. Query existing subscription by stripeSubscriptionId or stripeCustomerId
@@ -51,7 +54,21 @@ export class StripeIngestionService {
     const customerId = typeof obj.customer === 'string' ? obj.customer : null;
 
     if (subId || customerId) {
-      // Look up subscription
+      // 2.1 First check Category B ChannelRoutingLookup (unaffected by tenant RLS)
+      const routingLookup = await this.prisma.channelRoutingLookup.findFirst({
+        where: {
+          provider: 'STRIPE',
+          externalAccountId: { in: [subId, customerId].filter(Boolean) as string[] },
+          status: 'ACTIVE',
+        },
+        select: { organizationId: true },
+      });
+
+      if (routingLookup) {
+        return routingLookup.organizationId;
+      }
+
+      // 2.2 Fallback query for subscriptions using direct Prisma query
       const match = await this.prisma.subscription.findFirst({
         where: {
           OR: [
@@ -69,6 +86,7 @@ export class StripeIngestionService {
 
     return null;
   }
+
 
   /**
    * Ingest and process an inbound Stripe webhook event.
@@ -150,6 +168,52 @@ export class StripeIngestionService {
           currentPeriodEnd: periodEnd,
           cancelAtPeriodEnd: Boolean(obj.cancel_at_period_end),
         });
+
+        // Persist Category B channel routing lookup so subsequent events without metadata resolve cleanly
+        if (stripeSubId) {
+          await this.prisma.channelRoutingLookup.upsert({
+            where: {
+              uq_channel_routing_provider_ext: {
+                provider: 'STRIPE',
+                externalAccountId: stripeSubId,
+              },
+            },
+            create: {
+              provider: 'STRIPE',
+              externalAccountId: stripeSubId,
+              channelId,
+              organizationId: orgId,
+              status: 'ACTIVE',
+            },
+            update: {
+              channelId,
+              organizationId: orgId,
+              status: 'ACTIVE',
+            },
+          });
+        }
+        if (stripeCustId) {
+          await this.prisma.channelRoutingLookup.upsert({
+            where: {
+              uq_channel_routing_provider_ext: {
+                provider: 'STRIPE',
+                externalAccountId: stripeCustId,
+              },
+            },
+            create: {
+              provider: 'STRIPE',
+              externalAccountId: stripeCustId,
+              channelId,
+              organizationId: orgId,
+              status: 'ACTIVE',
+            },
+            update: {
+              channelId,
+              organizationId: orgId,
+              status: 'ACTIVE',
+            },
+          });
+        }
         break;
       }
 

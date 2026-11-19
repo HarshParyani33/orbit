@@ -8,6 +8,8 @@ import { AuthService } from './auth/auth.service';
 import { AuthController } from './auth/auth.controller';
 import { JwtAuthGuard } from './auth/auth.guard';
 import { CsrfGuard } from './auth/csrf.guard';
+import { RateLimiterService } from './auth/rate-limiter.service';
+import { RateLimitGuard } from './auth/rate-limit.guard';
 import { TenantTransactionRunner } from './tenancy/tenant-transaction-runner';
 import { TenantGuard } from './tenancy/tenant.guard';
 import { OrganizationsService } from './organizations/organizations.service';
@@ -75,6 +77,8 @@ import { StripeSignatureGuard } from './webhooks/guards/stripe-signature.guard';
     PrismaService,
     TokenService,
     AuthService,
+    RateLimiterService,
+    RateLimitGuard,
     JwtAuthGuard,
     WidgetGuard,
     MetaSignatureGuard,
@@ -107,6 +111,8 @@ import { StripeSignatureGuard } from './webhooks/guards/stripe-signature.guard';
     PrismaService,
     TokenService,
     AuthService,
+    RateLimiterService,
+    RateLimitGuard,
     TenantTransactionRunner,
     TenantGuard,
     CsrfGuard,

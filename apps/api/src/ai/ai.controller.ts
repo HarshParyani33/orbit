@@ -12,6 +12,7 @@ import {
 import { AiService } from './ai.service';
 import { JwtAuthGuard } from '../auth/auth.guard';
 import { TenantGuard } from '../tenancy/tenant.guard';
+import { RateLimit, RateLimitGuard } from '../auth/rate-limit.guard';
 import { CurrentTenant } from '../tenancy/tenant-context.decorator';
 import { TenantContext, ApiResponse } from '@orbit/shared';
 import {
@@ -19,7 +20,7 @@ import {
 } from '@orbit/validation';
 
 @Controller('api/ai')
-@UseGuards(JwtAuthGuard, TenantGuard)
+@UseGuards(JwtAuthGuard, TenantGuard, RateLimitGuard)
 export class AiController {
   constructor(@Inject(AiService) private readonly aiService: AiService) {}
 
@@ -81,6 +82,7 @@ export class AiController {
   }
 
   @Post('conversations/:id/suggest')
+  @RateLimit({ maxRequests: 60, windowMs: 60000, keyPrefix: 'ai_sug', keyBy: 'org' })
   async generateSuggestion(
     @CurrentTenant() tenant: TenantContext,
     @Param('id') conversationId: string

@@ -25,6 +25,9 @@ export interface IChannelAdapter {
 export * from './ai/types';
 export * from './ai/mock-provider';
 export * from './ai/openai-provider';
+export * from './ai/groq-provider';
+export * from './ai/openrouter-provider';
+export * from './ai/resilient-ai-gateway';
 export * from './ai/citation-validator';
 
 // WhatsApp Provider Contracts & Adapters
@@ -45,4 +48,12 @@ export * from './embeddings/types';
 export * from './embeddings/chunking-engine';
 export * from './embeddings/mock-embedding.provider';
 export * from './embeddings/openai-embedding.provider';
+
+// Cryptographic Envelope Encryption
+export * from './security/envelope-encryption.service';
+
+// Voice Provider Contracts & Briefing Types
+export * from './voice/types';
+
+
 

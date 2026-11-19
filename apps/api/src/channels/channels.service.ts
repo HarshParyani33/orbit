@@ -2,51 +2,96 @@ import { Injectable, Inject, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { TenantTransactionRunner } from '../tenancy/tenant-transaction-runner';
 import { CreateChannelInput, UpdateChannelInput } from '@orbit/validation';
+import { EnvelopeEncryptionService } from '@orbit/integrations';
 
 @Injectable()
 export class ChannelsService {
   constructor(@Inject(TenantTransactionRunner) private readonly tenantRunner: TenantTransactionRunner) {}
 
   async listChannels(organizationId: string) {
-    return this.tenantRunner.runWithTenant(organizationId, async (tx) => {
+    const channels = await this.tenantRunner.runWithTenant(organizationId, async (tx) => {
       return tx.channel.findMany({
         where: { deletedAt: null },
         orderBy: { createdAt: 'desc' },
       });
     });
+
+    return channels.map((channel) => ({
+      ...channel,
+      config: EnvelopeEncryptionService.maskConfig((channel.config as Record<string, any>) ?? {}),
+    }));
   }
 
   async getChannel(organizationId: string, channelId: string) {
-    return this.tenantRunner.runWithTenant(organizationId, async (tx) => {
-      const channel = await tx.channel.findFirst({
+    const channel = await this.tenantRunner.runWithTenant(organizationId, async (tx) => {
+      const ch = await tx.channel.findFirst({
         where: {
           id: channelId,
           organizationId,
           deletedAt: null,
         },
       });
-      if (!channel) {
+      if (!ch) {
         throw new NotFoundException('Channel not found');
       }
-      return channel;
+      return ch;
     });
+
+    return {
+      ...channel,
+      config: EnvelopeEncryptionService.maskConfig((channel.config as Record<string, any>) ?? {}),
+    };
+  }
+
+  async getDecryptedChannelConfig(organizationId: string, channelId: string): Promise<Record<string, any>> {
+    const channel = await this.tenantRunner.runWithTenant(organizationId, async (tx) => {
+      const ch = await tx.channel.findFirst({
+        where: {
+          id: channelId,
+          organizationId,
+          deletedAt: null,
+        },
+      });
+      if (!ch) {
+        throw new NotFoundException('Channel not found');
+      }
+      return ch;
+    });
+
+    return EnvelopeEncryptionService.decryptConfig((channel.config as Record<string, any>) ?? {}, organizationId);
   }
 
   async createChannel(organizationId: string, data: CreateChannelInput) {
-    return this.tenantRunner.runWithTenant(organizationId, async (tx) => {
+    const rawConfig = (data.config as Record<string, any>) ?? {};
+    const encryptedConfig = EnvelopeEncryptionService.encryptConfig(rawConfig, organizationId);
+
+    const channel = await this.tenantRunner.runWithTenant(organizationId, async (tx) => {
       return tx.channel.create({
         data: {
           organizationId,
           name: data.name,
           provider: data.provider,
-          config: (data.config as Prisma.InputJsonObject) ?? {},
+          config: encryptedConfig as Prisma.InputJsonObject,
         },
       });
     });
+
+    return {
+      ...channel,
+      config: EnvelopeEncryptionService.maskConfig((channel.config as Record<string, any>) ?? {}),
+    };
   }
 
   async updateChannel(organizationId: string, channelId: string, data: UpdateChannelInput) {
-    return this.tenantRunner.runWithTenant(organizationId, async (tx) => {
+    let encryptedConfig: Prisma.InputJsonObject | undefined;
+    if (data.config) {
+      encryptedConfig = EnvelopeEncryptionService.encryptConfig(
+        data.config as Record<string, any>,
+        organizationId
+      ) as Prisma.InputJsonObject;
+    }
+
+    const channel = await this.tenantRunner.runWithTenant(organizationId, async (tx) => {
       const existing = await tx.channel.findFirst({
         where: { id: channelId, organizationId, deletedAt: null },
       });
@@ -62,11 +107,16 @@ export class ChannelsService {
         },
         data: {
           ...(data.name ? { name: data.name } : {}),
-          ...(data.config ? { config: data.config as Prisma.InputJsonObject } : {}),
+          ...(encryptedConfig ? { config: encryptedConfig } : {}),
           ...(data.status ? { status: data.status } : {}),
         },
       });
     });
+
+    return {
+      ...channel,
+      config: EnvelopeEncryptionService.maskConfig((channel.config as Record<string, any>) ?? {}),
+    };
   }
 
   async deleteChannel(organizationId: string, channelId: string) {
@@ -91,4 +141,5 @@ export class ChannelsService {
     });
   }
 }
+
 

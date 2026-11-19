@@ -132,7 +132,10 @@ export class AiService {
     conversationId: string,
     options?: { mockReply?: string; minSimilarity?: number }
   ) {
-    return this.tenantRunner.runWithTenant(organizationId, async (tx) => {
+    // =========================================================================
+    // PHASE 1: PRE-FLIGHT DATABASE TRANSACTION (Scoped, Short-lived)
+    // =========================================================================
+    const preflight = await this.tenantRunner.runWithTenant(organizationId, async (tx) => {
       // 1. Fetch conversation and messages
       const conversation = await tx.conversation.findFirst({
         where: { id: conversationId, organizationId },
@@ -151,18 +154,24 @@ export class AiService {
       // 2. Human Takeover Invariant Check
       if (conversation.status === 'SNOOZED' || conversation.status === 'RESOLVED') {
         return {
-          bypassed: true,
-          reason: 'HUMAN_TAKEOVER_STATUS_CLOSED',
-          message: 'AI generation skipped: conversation is snoozed or resolved',
+          bypassed: true as const,
+          bypassPayload: {
+            bypassed: true,
+            reason: 'HUMAN_TAKEOVER_STATUS_CLOSED',
+            message: 'AI generation skipped: conversation is snoozed or resolved',
+          },
         };
       }
 
       const lastMessage = conversation.messages[conversation.messages.length - 1];
       if (lastMessage && lastMessage.senderType === 'AGENT') {
         return {
-          bypassed: true,
-          reason: 'HUMAN_TAKEOVER_AGENT_REPLIED',
-          message: 'AI generation skipped: agent has already replied to customer',
+          bypassed: true as const,
+          bypassPayload: {
+            bypassed: true,
+            reason: 'HUMAN_TAKEOVER_AGENT_REPLIED',
+            message: 'AI generation skipped: agent has already replied to customer',
+          },
         };
       }
 
@@ -201,7 +210,7 @@ export class AiService {
         ? (aiConfig.policyRules as string[])
         : [];
 
-      // 5.1 Semantic Knowledge Retrieval & Grounding (Section 9 Architecture)
+      // 5.1 Semantic Knowledge Retrieval & Grounding
       let dynamicInstructions = aiConfig.systemInstructions;
       const chunkMap = new Map<string, GroundingSourceChunk>();
 
@@ -226,13 +235,16 @@ export class AiService {
             );
 
             if (knowledgeResults.totalMatched === 0) {
-              // Insufficient-Evidence Abstention (Section 9.2)
+              // Insufficient-Evidence Abstention
               return {
-                bypassed: true,
-                reason: 'LOW_RELEVANCE',
-                message:
-                  'I do not have sufficient information regarding that, but I can connect you with our team.',
-                escalatedToHuman: true,
+                bypassed: true as const,
+                bypassPayload: {
+                  bypassed: true,
+                  reason: 'LOW_RELEVANCE',
+                  message:
+                    'I do not have sufficient information regarding that, but I can connect you with our team.',
+                  escalatedToHuman: true,
+                },
               };
             }
 
@@ -274,7 +286,7 @@ export class AiService {
         }
       });
 
-      // 6. Record logical AI Request (The Customer Turn)
+      // 6. Record logical AI Request (The Customer Turn) in PENDING status
       const idempotencyKey = `ai_req_${conversationId}_${Date.now()}`;
       const aiRequest = await tx.aiRequest.create({
         data: {
@@ -285,27 +297,113 @@ export class AiService {
         },
       });
 
-      // 7. Invoke Provider
-      let provider: IAiProvider;
-      if (options?.mockReply) {
-        provider = new MockAiProvider(aiConfig.model, options.mockReply);
-      } else {
-        provider = this.getProviderInstance(aiConfig.provider, aiConfig.model);
-      }
+      return {
+        bypassed: false as const,
+        aiRequest,
+        aiConfig,
+        pricing,
+        promptMessages,
+        dynamicInstructions,
+        policyRules,
+        chunkMap,
+      };
+    });
 
-      const completion = await provider.generateResponse({
+    if (preflight.bypassed) {
+      return preflight.bypassPayload;
+    }
+
+    const {
+      aiRequest,
+      aiConfig,
+      pricing,
+      promptMessages,
+      dynamicInstructions,
+      policyRules,
+      chunkMap,
+    } = preflight;
+
+    // =========================================================================
+    // PHASE 2: EXTERNAL PROVIDER EXECUTION (Decoupled — Zero Database Locks)
+    // =========================================================================
+    let provider: IAiProvider;
+    if (options?.mockReply) {
+      provider = new MockAiProvider(aiConfig.model, options.mockReply);
+    } else {
+      provider = this.getProviderInstance(aiConfig.provider, aiConfig.model);
+    }
+
+    let completion: any;
+    let providerError: Error | null = null;
+
+    try {
+      completion = await provider.generateResponse({
         messages: promptMessages,
         systemInstructions: dynamicInstructions,
         policyRules,
         model: aiConfig.model,
         temperature: Number(aiConfig.temperature),
       });
+    } catch (err: any) {
+      providerError = err instanceof Error ? err : new Error(String(err));
+    }
 
-      // 7.1 Deterministic Citation & Fact Verification (Section 9.1)
+    // =========================================================================
+    // PHASE 3: POST-FLIGHT DATABASE TRANSACTION (Scoped, Short-lived)
+    // =========================================================================
+    return this.tenantRunner.runWithTenant(organizationId, async (tx) => {
+      // 3.1 Handle Provider Failure (Durable Failure Accounting Invariant)
+      if (providerError || !completion) {
+        await tx.aiRequestAttempt.create({
+          data: {
+            organizationId,
+            requestId: aiRequest.id,
+            provider: aiConfig.provider,
+            model: aiConfig.model,
+            promptTokens: 0,
+            completionTokens: 0,
+            incurredCostUsd: 0,
+            costReconciliationStatus: 'UNKNOWN',
+            isTenantBillable: false,
+            status: 'ERROR',
+          },
+        });
+
+        await tx.aiRequest.update({
+          where: { uq_ai_requests_id_org: { id: aiRequest.id, organizationId } },
+          data: { status: 'FAILED' },
+        });
+
+        throw new BadRequestException(
+          `AI Provider execution failed: ${providerError?.message || 'Unknown error'}`
+        );
+      }
+
+      // 3.2 Deterministic Citation & Fact Verification
       let citations: string[] = [];
       if (chunkMap.size > 0) {
         const validation = CitationValidator.validate(completion.content, chunkMap);
         if (!validation.isValid) {
+          await tx.aiRequestAttempt.create({
+            data: {
+              organizationId,
+              requestId: aiRequest.id,
+              provider: aiConfig.provider,
+              model: completion.model,
+              promptTokens: completion.promptTokens,
+              completionTokens: completion.completionTokens,
+              incurredCostUsd: 0,
+              costReconciliationStatus: 'KNOWN',
+              isTenantBillable: false,
+              status: 'ERROR',
+            },
+          });
+
+          await tx.aiRequest.update({
+            where: { uq_ai_requests_id_org: { id: aiRequest.id, organizationId } },
+            data: { status: 'FAILED' },
+          });
+
           return {
             bypassed: true,
             reason: validation.violationReason,
@@ -317,14 +415,14 @@ export class AiService {
         citations = validation.citedChunkIds;
       }
 
-      // 8. Mathematical Cost Accounting
+      // 3.3 Mathematical Cost Accounting
       const promptRate = Number(pricing.promptTokenRatePerM);
       const completionRate = Number(pricing.completionTokenRatePerM);
       const incurredCostUsd =
         (completion.promptTokens * promptRate) / 1_000_000 +
         (completion.completionTokens * completionRate) / 1_000_000;
 
-      // 9. Record Physical Attempt (Platform COGS Liability)
+      // 3.4 Record Physical Attempt (Platform COGS Liability)
       await tx.aiRequestAttempt.create({
         data: {
           organizationId,
@@ -340,7 +438,7 @@ export class AiService {
         },
       });
 
-      // 10. Record Customer Billable Event (Exactly-Once per Turn)
+      // 3.5 Record Customer Billable Event (Exactly-Once per Turn)
       await tx.aiUsageEvent.create({
         data: {
           organizationId,
@@ -350,7 +448,7 @@ export class AiService {
         },
       });
 
-      // 11. Mark AI request COMPLETED
+      // 3.6 Mark AI request COMPLETED
       await tx.aiRequest.update({
         where: { uq_ai_requests_id_org: { id: aiRequest.id, organizationId } },
         data: { status: 'COMPLETED' },
@@ -368,3 +466,4 @@ export class AiService {
     });
   }
 }
+
