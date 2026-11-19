@@ -48,11 +48,24 @@ export class ResilientAiGateway implements IAiProvider {
     return this.circuits.get(providerName);
   }
 
+  public getAllCircuits(): Map<string, ProviderCircuitState> {
+    return new Map(this.circuits);
+  }
+
   public resetCircuit(providerName: string): void {
     const circuit = this.circuits.get(providerName);
     if (circuit) {
       circuit.state = 'CLOSED';
       circuit.consecutiveFailures = 0;
+    }
+  }
+
+  public tripCircuit(providerName: string): void {
+    const circuit = this.circuits.get(providerName);
+    if (circuit) {
+      circuit.state = 'OPEN';
+      circuit.consecutiveFailures = this.failureThreshold;
+      circuit.lastFailureTime = Date.now();
     }
   }
 

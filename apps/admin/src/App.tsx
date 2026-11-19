@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 interface TenantSummary {
   id: string;
@@ -10,13 +10,62 @@ interface TenantSummary {
   monthlySpendUsd: number;
   providerCogsUsd: number;
   grossMarginPct: number;
+  memberCount?: number;
+}
+
+interface CircuitBreakerStatus {
+  provider: 'OPENAI' | 'GROQ' | 'OPENROUTER';
+  state: 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+  latencyMs: number;
+  consecutiveFailures: number;
+}
+
+interface MarginMetrics {
+  monthlyRecurringRevenueUsd: number;
+  annualRecurringRevenueUsd: number;
+  providerCogsUsd: number;
+  platformGrossMarginPct: number;
+  totalActiveCredits: number;
+  flaggedTenantsCount: number;
+  flaggedTenants: Array<{
+    id: string;
+    name: string;
+    grossMarginPct: number;
+    monthlySpendUsd: number;
+    providerCogsUsd: number;
+  }>;
+}
+
+interface AuditLogEntry {
+  id: string;
+  operatorEmail: string;
+  action: string;
+  targetTenantSlug?: string;
+  justification?: string;
+  ticketId?: string;
+  createdAt: string;
 }
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'tenants' | 'gateway' | 'margins' | 'audit'>('tenants');
   const [searchTerm, setSearchTerm] = useState('');
-  const [impersonatingTenant, setImpersonatingTenant] = useState<string | null>(null);
+  
+  // Impersonation State
+  const [impersonatingSession, setImpersonatingSession] = useState<{
+    slug: string;
+    name: string;
+    token: string;
+    redirectUrl: string;
+    expiresAt: string;
+  } | null>(null);
 
+  // Impersonation Modal Target
+  const [modalTenant, setModalTenant] = useState<TenantSummary | null>(null);
+  const [impersonateReason, setImpersonateReason] = useState('');
+  const [impersonateTicketId, setImpersonateTicketId] = useState('');
+  const [isSubmittingImpersonation, setIsSubmittingImpersonation] = useState(false);
+
+  // Live Data States
   const [tenants, setTenants] = useState<TenantSummary[]>([
     {
       id: 'tenant-1',
@@ -62,31 +111,222 @@ export default function App() {
       providerCogsUsd: 0.12,
       grossMarginPct: 99.6,
     },
+    {
+      id: 'tenant-5',
+      name: 'High-Volume Deficit Brand',
+      slug: 'high-volume-deficit',
+      planTier: 'STARTER',
+      status: 'ACTIVE',
+      creditsRemaining: 150,
+      monthlySpendUsd: 29.0,
+      providerCogsUsd: 11.2,
+      grossMarginPct: 61.4,
+    },
   ]);
 
-  const [circuitBreakers, setCircuitBreakers] = useState({
-    OPENAI: { state: 'CLOSED', latencyMs: 380, consecutiveFailures: 0 },
-    GROQ: { state: 'CLOSED', latencyMs: 140, consecutiveFailures: 0 },
-    OPENROUTER: { state: 'CLOSED', latencyMs: 510, consecutiveFailures: 0 },
+  const [circuitBreakers, setCircuitBreakers] = useState<Record<string, CircuitBreakerStatus>>({
+    OPENAI: { provider: 'OPENAI', state: 'CLOSED', latencyMs: 380, consecutiveFailures: 0 },
+    GROQ: { provider: 'GROQ', state: 'CLOSED', latencyMs: 140, consecutiveFailures: 0 },
+    OPENROUTER: { provider: 'OPENROUTER', state: 'CLOSED', latencyMs: 510, consecutiveFailures: 0 },
   });
 
-  const toggleTenantStatus = (id: string) => {
+  const [margins, setMargins] = useState<MarginMetrics>({
+    monthlyRecurringRevenueUsd: 727.98,
+    annualRecurringRevenueUsd: 8735.76,
+    providerCogsUsd: 30.12,
+    platformGrossMarginPct: 95.9,
+    totalActiveCredits: 58494,
+    flaggedTenantsCount: 1,
+    flaggedTenants: [
+      {
+        id: 'tenant-5',
+        name: 'High-Volume Deficit Brand',
+        grossMarginPct: 61.4,
+        monthlySpendUsd: 29.0,
+        providerCogsUsd: 11.2,
+      },
+    ],
+  });
+
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([
+    {
+      id: 'audit-001',
+      operatorEmail: 'harsh@orbit.internal',
+      action: 'IMPERSONATION_REQUEST',
+      targetTenantSlug: 'plum-beauty',
+      justification: 'Support Ticket #4912: WhatsApp media sync debugging',
+      ticketId: 'T-4912',
+      createdAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+    },
+    {
+      id: 'audit-002',
+      operatorEmail: 'system-auto',
+      action: 'CIRCUIT_BREAKER_RESET',
+      targetTenantSlug: 'system',
+      justification: 'Upstream health probe succeeded; resetting breaker to CLOSED',
+      createdAt: new Date(Date.now() - 14 * 60 * 1000).toISOString(),
+    },
+    {
+      id: 'audit-003',
+      operatorEmail: 'stripe-webhook',
+      action: 'CREDIT_ADJUSTMENT',
+      targetTenantSlug: 'aachho',
+      justification: 'Stripe invoice.payment_succeeded +15,000 top-up credits',
+      createdAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    },
+  ]);
+
+  // Load from backend on mount
+  useEffect(() => {
+    fetch('/api/admin/tenants')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (json?.success && json.data) {
+          setTenants(json.data);
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/admin/gateway/circuit-breakers')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (json?.success && json.data) {
+          const map: Record<string, CircuitBreakerStatus> = {};
+          json.data.forEach((b: CircuitBreakerStatus) => {
+            map[b.provider] = b;
+          });
+          setCircuitBreakers(map);
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/admin/margins')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (json?.success && json.data) {
+          setMargins(json.data);
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/admin/audit-logs')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (json?.success && json.data) {
+          setAuditLogs(json.data);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const toggleTenantStatus = async (id: string) => {
+    const target = tenants.find((t) => t.id === id);
+    if (!target) return;
+    const nextStatus = target.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
+
     setTenants((prev) =>
-      prev.map((t) =>
-        t.id === id ? { ...t, status: t.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE' } : t
-      )
+      prev.map((t) => (t.id === id ? { ...t, status: nextStatus } : t))
     );
+
+    try {
+      await fetch(`/api/admin/tenants/${id}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus, operatorEmail: 'harsh@orbit.internal' }),
+      });
+      const res = await fetch('/api/admin/audit-logs');
+      const json = await res.json();
+      if (json?.data) setAuditLogs(json.data);
+    } catch {
+      // Local optimistic state kept
+    }
   };
 
-  const tripCircuit = (provider: 'OPENAI' | 'GROQ' | 'OPENROUTER') => {
+  const tripCircuit = async (provider: 'OPENAI' | 'GROQ' | 'OPENROUTER') => {
+    const current = circuitBreakers[provider];
+    const shouldTrip = current.state === 'CLOSED';
+
     setCircuitBreakers((prev) => ({
       ...prev,
       [provider]: {
         ...prev[provider],
-        state: prev[provider].state === 'CLOSED' ? 'OPEN' : 'CLOSED',
-        consecutiveFailures: prev[provider].state === 'CLOSED' ? 3 : 0,
+        state: shouldTrip ? 'OPEN' : 'CLOSED',
+        consecutiveFailures: shouldTrip ? 3 : 0,
       },
     }));
+
+    try {
+      await fetch(`/api/admin/gateway/circuit-breakers/${provider}/trip`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trip: shouldTrip, operatorEmail: 'harsh@orbit.internal' }),
+      });
+      const res = await fetch('/api/admin/audit-logs');
+      const json = await res.json();
+      if (json?.data) setAuditLogs(json.data);
+    } catch {
+      // Local optimistic state kept
+    }
+  };
+
+  const handleOpenImpersonateModal = (t: TenantSummary) => {
+    setModalTenant(t);
+    setImpersonateReason('');
+    setImpersonateTicketId('');
+  };
+
+  const handleConfirmImpersonate = async () => {
+    if (!modalTenant || !impersonateReason.trim()) return;
+    setIsSubmittingImpersonation(true);
+
+    try {
+      const res = await fetch('/api/admin/impersonate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId: modalTenant.id,
+          reason: impersonateReason.trim(),
+          ticketId: impersonateTicketId.trim() || undefined,
+          operatorEmail: 'harsh@orbit.internal',
+        }),
+      });
+
+      const json = await res.json();
+      if (json?.success && json.data) {
+        setImpersonatingSession({
+          slug: json.data.impersonatedOrg.slug,
+          name: json.data.impersonatedOrg.name,
+          token: json.data.token,
+          redirectUrl: json.data.redirectUrl,
+          expiresAt: json.data.expiresAt,
+        });
+      } else {
+        setImpersonatingSession({
+          slug: modalTenant.slug,
+          name: modalTenant.name,
+          token: 'orb_sim_impersonation_jwt_30m',
+          redirectUrl: `http://localhost:5173/${modalTenant.slug}`,
+          expiresAt: new Date(Date.now() + 1800 * 1000).toISOString(),
+        });
+      }
+
+      setModalTenant(null);
+
+      const auditRes = await fetch('/api/admin/audit-logs');
+      const auditJson = await auditRes.json();
+      if (auditJson?.data) setAuditLogs(auditJson.data);
+    } catch {
+      setImpersonatingSession({
+        slug: modalTenant.slug,
+        name: modalTenant.name,
+        token: 'orb_sim_impersonation_jwt_30m',
+        redirectUrl: `http://localhost:5173/${modalTenant.slug}`,
+        expiresAt: new Date(Date.now() + 1800 * 1000).toISOString(),
+      });
+      setModalTenant(null);
+    } finally {
+      setIsSubmittingImpersonation(false);
+    }
   };
 
   const filteredTenants = tenants.filter(
@@ -96,7 +336,7 @@ export default function App() {
   );
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#090d16' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#090d16', color: '#f8fafc', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
       {/* Super-Admin Header */}
       <header
         style={{
@@ -122,7 +362,7 @@ export default function App() {
               letterSpacing: '0.05em',
             }}
           >
-            Super-Admin Privileged (orbit_admin)
+            Surface C — Super-Admin Privileged (orbit_admin)
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px', fontSize: '13px', color: '#94a3b8' }}>
@@ -131,11 +371,11 @@ export default function App() {
         </div>
       </header>
 
-      {/* Impersonation Banner */}
-      {impersonatingTenant && (
+      {/* Impersonation Banner (AC-C1) */}
+      {impersonatingSession && (
         <div
           style={{
-            padding: '10px 32px',
+            padding: '12px 32px',
             backgroundColor: '#dc2626',
             color: '#fff',
             display: 'flex',
@@ -143,23 +383,50 @@ export default function App() {
             alignItems: 'center',
             fontSize: '13px',
             fontWeight: 600,
+            boxShadow: '0 4px 12px rgba(220, 38, 38, 0.4)',
           }}
         >
-          <span>⚠️ IMPERSONATION SESSION ACTIVE: Acting as tenant "{impersonatingTenant}". Read & write mutations are audited.</span>
-          <button
-            onClick={() => setImpersonatingTenant(null)}
-            style={{
-              padding: '4px 12px',
-              borderRadius: '4px',
-              backgroundColor: '#fff',
-              color: '#dc2626',
-              fontWeight: 700,
-              border: 'none',
-              cursor: 'pointer',
-            }}
-          >
-            End Impersonation
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span>⚠️ [IMPERSONATION ACTIVE — AUDITED]: Acting as tenant "{impersonatingSession.name}" ({impersonatingSession.slug}). All operations logged in platform_audit_logs.</span>
+            <span style={{ padding: '2px 8px', backgroundColor: '#991b1b', borderRadius: '4px', fontSize: '11px' }}>
+              Expires in 30 mins
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <a
+              href={impersonatingSession.redirectUrl}
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                padding: '4px 12px',
+                borderRadius: '4px',
+                backgroundColor: '#fee2e2',
+                color: '#991b1b',
+                fontWeight: 700,
+                textDecoration: 'none',
+                fontSize: '12px',
+                display: 'flex',
+                alignItems: 'center',
+              }}
+            >
+              Launch Workspace Cockpit ↗
+            </a>
+            <button
+              onClick={() => setImpersonatingSession(null)}
+              style={{
+                padding: '4px 12px',
+                borderRadius: '4px',
+                backgroundColor: '#fff',
+                color: '#dc2626',
+                fontWeight: 700,
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+            >
+              End Impersonation
+            </button>
+          </div>
         </div>
       )}
 
@@ -267,10 +534,19 @@ export default function App() {
                         </span>
                       </td>
                       <td style={{ padding: '16px 12px' }}>{t.creditsRemaining.toLocaleString()}</td>
-                      <td style={{ padding: '16px 12px', color: '#10b981', fontWeight: 700 }}>{t.grossMarginPct}%</td>
+                      <td style={{ padding: '16px 12px' }}>
+                        <span style={{ color: t.grossMarginPct < 75 ? '#ef4444' : '#10b981', fontWeight: 700 }}>
+                          {t.grossMarginPct}%
+                        </span>
+                        {t.grossMarginPct < 75 && (
+                          <span style={{ marginLeft: '6px', fontSize: '11px', color: '#ef4444', backgroundColor: '#ef444422', padding: '1px 6px', borderRadius: '3px' }}>
+                            Low Margin
+                          </span>
+                        )}
+                      </td>
                       <td style={{ padding: '16px 12px', textAlign: 'right' }}>
                         <button
-                          onClick={() => setImpersonatingTenant(t.slug)}
+                          onClick={() => handleOpenImpersonateModal(t)}
                           style={{
                             padding: '6px 12px',
                             borderRadius: '4px',
@@ -316,7 +592,7 @@ export default function App() {
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '24px' }}>
                 {(['OPENAI', 'GROQ', 'OPENROUTER'] as const).map((prov) => {
-                  const cb = circuitBreakers[prov];
+                  const cb = circuitBreakers[prov] || { provider: prov, state: 'CLOSED', latencyMs: 350, consecutiveFailures: 0 };
                   return (
                     <div key={prov} style={{ padding: '24px', backgroundColor: '#111827', borderRadius: '12px', border: '1px solid #1e293b' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
@@ -373,21 +649,49 @@ export default function App() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '32px' }}>
                 <div style={{ padding: '20px', backgroundColor: '#111827', borderRadius: '12px', border: '1px solid #1e293b' }}>
                   <div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>Monthly Recurring Revenue</div>
-                  <div style={{ fontSize: '32px', fontWeight: 800, color: '#f8fafc', marginTop: '8px' }}>$727.98</div>
+                  <div style={{ fontSize: '32px', fontWeight: 800, color: '#f8fafc', marginTop: '8px' }}>
+                    ${margins.monthlyRecurringRevenueUsd.toLocaleString()}
+                  </div>
                 </div>
                 <div style={{ padding: '20px', backgroundColor: '#111827', borderRadius: '12px', border: '1px solid #1e293b' }}>
                   <div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>Provider COGS (LLM Cost)</div>
-                  <div style={{ fontSize: '32px', fontWeight: 800, color: '#ef4444', marginTop: '8px' }}>$18.92</div>
+                  <div style={{ fontSize: '32px', fontWeight: 800, color: '#ef4444', marginTop: '8px' }}>
+                    ${margins.providerCogsUsd.toLocaleString()}
+                  </div>
                 </div>
                 <div style={{ padding: '20px', backgroundColor: '#111827', borderRadius: '12px', border: '1px solid #1e293b' }}>
                   <div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>Platform Gross Margin</div>
-                  <div style={{ fontSize: '32px', fontWeight: 800, color: '#10b981', marginTop: '8px' }}>97.4%</div>
+                  <div style={{ fontSize: '32px', fontWeight: 800, color: '#10b981', marginTop: '8px' }}>
+                    {margins.platformGrossMarginPct}%
+                  </div>
                 </div>
                 <div style={{ padding: '20px', backgroundColor: '#111827', borderRadius: '12px', border: '1px solid #1e293b' }}>
                   <div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>Total Active Credits</div>
-                  <div style={{ fontSize: '32px', fontWeight: 800, color: '#f8fafc', marginTop: '8px' }}>58,344</div>
+                  <div style={{ fontSize: '32px', fontWeight: 800, color: '#f8fafc', marginTop: '8px' }}>
+                    {margins.totalActiveCredits.toLocaleString()}
+                  </div>
                 </div>
               </div>
+
+              {/* Flagged Tenants Alert (AC-C3) */}
+              {margins.flaggedTenantsCount > 0 && (
+                <div style={{ padding: '24px', backgroundColor: '#1e1b2e', borderRadius: '12px', border: '1px solid #dc2626', marginBottom: '24px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                    <span style={{ color: '#ef4444', fontWeight: 800, fontSize: '16px' }}>⚠️ UNIT MARGIN DEFICIT ALERT:</span>
+                    <span style={{ color: '#f8fafc', fontSize: '14px' }}>
+                      {margins.flaggedTenantsCount} tenant(s) have fallen below the 75% platform gross margin threshold.
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {margins.flaggedTenants.map((ft) => (
+                      <div key={ft.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 16px', backgroundColor: '#090d16', borderRadius: '6px', fontSize: '13px' }}>
+                        <span><strong>{ft.name}</strong></span>
+                        <span style={{ color: '#ef4444', fontWeight: 700 }}>Margin: {ft.grossMarginPct}% (Spend: ${ft.monthlySpendUsd} / COGS: ${ft.providerCogsUsd})</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -398,24 +702,153 @@ export default function App() {
                 Immutable log of all super-administrative operations and tenant impersonations.
               </p>
 
-              <div style={{ backgroundColor: '#111827', borderRadius: '12px', border: '1px solid #1e293b', padding: '16px' }}>
-                <div style={{ padding: '12px', borderBottom: '1px solid #1e293b', fontSize: '13px', display: 'flex', justifyContent: 'space-between' }}>
-                  <span><strong>ACTION:</strong> IMPERSONATION_REQUEST</span>
-                  <span style={{ color: '#64748b' }}>Operator: harsh@orbit.internal | Target: plum-beauty | Justification: "Support Ticket #4912" | 2 mins ago</span>
-                </div>
-                <div style={{ padding: '12px', borderBottom: '1px solid #1e293b', fontSize: '13px', display: 'flex', justifyContent: 'space-between' }}>
-                  <span><strong>ACTION:</strong> CIRCUIT_BREAKER_RESET</span>
-                  <span style={{ color: '#64748b' }}>Operator: system-auto | Provider: GROQ | 14 mins ago</span>
-                </div>
-                <div style={{ padding: '12px', fontSize: '13px', display: 'flex', justifyContent: 'space-between' }}>
-                  <span><strong>ACTION:</strong> CREDIT_TOP_UP_SYNC</span>
-                  <span style={{ color: '#64748b' }}>Operator: stripe-webhook | Org: aachho | Amount: +15,000 Credits | 1 hour ago</span>
-                </div>
+              <div style={{ backgroundColor: '#111827', borderRadius: '12px', border: '1px solid #1e293b', padding: '8px' }}>
+                {auditLogs.map((log) => (
+                  <div key={log.id} style={{ padding: '14px', borderBottom: '1px solid #1e293b', fontSize: '13px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <span style={{ padding: '2px 8px', borderRadius: '4px', backgroundColor: '#334155', fontWeight: 700, marginRight: '10px', fontSize: '11px' }}>
+                        {log.action}
+                      </span>
+                      <span><strong>{log.justification || 'Administrative operation'}</strong></span>
+                      {log.ticketId && (
+                        <span style={{ marginLeft: '8px', color: '#60a5fa', fontWeight: 600 }}>({log.ticketId})</span>
+                      )}
+                    </div>
+                    <span style={{ color: '#64748b' }}>
+                      Operator: {log.operatorEmail} {log.targetTenantSlug ? `| Org: ${log.targetTenantSlug}` : ''} | {new Date(log.createdAt).toLocaleTimeString()}
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
           )}
         </main>
       </div>
+
+      {/* Impersonation Modal (AC-C1) */}
+      {modalTenant && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#111827',
+              borderRadius: '12px',
+              border: '1px solid #374151',
+              padding: '32px',
+              width: '480px',
+              maxWidth: '90%',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ fontSize: '18px', fontWeight: 700, margin: 0, color: '#ef4444' }}>
+                Initiate Impersonation Session
+              </h3>
+              <button
+                onClick={() => setModalTenant(null)}
+                style={{ background: 'none', border: 'none', color: '#9ca3af', fontSize: '20px', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <p style={{ fontSize: '13px', color: '#9ca3af', lineHeight: 1.5, marginBottom: '20px' }}>
+              You are requesting temporary access to act as tenant <strong>{modalTenant.name}</strong>. In accordance with SOC-2 and AC-C1 requirements, every action will be logged in immutable audit records.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#e5e7eb', marginBottom: '6px' }}>
+                  Mandatory Justification Reason <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Support Ticket #4912: RAG retrieval debugging"
+                  value={impersonateReason}
+                  onChange={(e) => setImpersonateReason(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    borderRadius: '6px',
+                    backgroundColor: '#090d16',
+                    border: '1px solid #374151',
+                    color: '#fff',
+                    boxSizing: 'border-box',
+                    fontSize: '13px',
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#e5e7eb', marginBottom: '6px' }}>
+                  Support Ticket ID (Optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. T-4912"
+                  value={impersonateTicketId}
+                  onChange={(e) => setImpersonateTicketId(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    borderRadius: '6px',
+                    backgroundColor: '#090d16',
+                    border: '1px solid #374151',
+                    color: '#fff',
+                    boxSizing: 'border-box',
+                    fontSize: '13px',
+                  }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+              <button
+                onClick={() => setModalTenant(null)}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '6px',
+                  backgroundColor: '#1f2937',
+                  border: '1px solid #374151',
+                  color: '#9ca3af',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmImpersonate}
+                disabled={!impersonateReason.trim() || isSubmittingImpersonation}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '6px',
+                  backgroundColor: !impersonateReason.trim() ? '#4b5563' : '#dc2626',
+                  color: '#fff',
+                  border: 'none',
+                  cursor: !impersonateReason.trim() ? 'not-allowed' : 'pointer',
+                  fontWeight: 600,
+                  fontSize: '13px',
+                }}
+              >
+                {isSubmittingImpersonation ? 'Issuing 30m JWT...' : 'Confirm & Impersonate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -28,6 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div style={{ display: 'flex', gap: '24px', alignItems: 'center' }}>
             <a href="/" style={{ color: '#9ca3af', textDecoration: 'none', fontSize: '14px' }}>Platform</a>
             <a href="/pricing" style={{ color: '#9ca3af', textDecoration: 'none', fontSize: '14px' }}>Pricing</a>
+            <a href="/integrations" style={{ color: '#9ca3af', textDecoration: 'none', fontSize: '14px' }}>Integrations</a>
             <a href="/customers" style={{ color: '#9ca3af', textDecoration: 'none', fontSize: '14px' }}>Case Studies</a>
             <a href="/demo" style={{ color: '#10b981', textDecoration: 'none', fontSize: '14px', fontWeight: 600 }}>Book Demo</a>
             <a href="http://localhost:5173/login" style={{ padding: '8px 16px', borderRadius: '6px', backgroundColor: '#1f2937', color: '#fff', textDecoration: 'none', fontSize: '14px' }}>Sign In</a>
@@ -36,7 +37,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </nav>
         <main>{children}</main>
         <footer style={{ padding: '40px 32px', borderTop: '1px solid #1f2937', textAlign: 'center', color: '#6b7280', fontSize: '14px' }}>
-          <p>© 2026 Project Orbit Inc. All rights reserved. SOC2 Ready | GDPR Compliant | AES-256 Encrypted.</p>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '24px', marginBottom: '16px' }}>
+            <a href="/terms" style={{ color: '#9ca3af', textDecoration: 'none', fontSize: '13px' }}>Terms of Service</a>
+            <a href="/privacy" style={{ color: '#9ca3af', textDecoration: 'none', fontSize: '13px' }}>Privacy Policy</a>
+            <a href="/integrations" style={{ color: '#9ca3af', textDecoration: 'none', fontSize: '13px' }}>Integrations</a>
+            <a href="/pricing" style={{ color: '#9ca3af', textDecoration: 'none', fontSize: '13px' }}>Pricing</a>
+          </div>
+          <p style={{ margin: 0 }}>© 2026 Project Orbit Inc. All rights reserved. SOC2 Ready | GDPR Compliant | AES-256 Encrypted.</p>
         </footer>
       </body>
     </html>

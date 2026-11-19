@@ -60,6 +60,8 @@ import { VoiceService } from './voice/voice.service';
 import { VoiceController } from './voice/voice.controller';
 import { CampaignsService } from './campaigns/campaigns.service';
 import { CampaignsController } from './campaigns/campaigns.controller';
+import { AdminService } from './admin/admin.service';
+import { AdminController } from './admin/admin.controller';
 
 @Module({
   imports: [
@@ -95,6 +97,7 @@ import { CampaignsController } from './campaigns/campaigns.controller';
     McpController,
     VoiceController,
     CampaignsController,
+    AdminController,
   ],
   providers: [
     PrismaService,
@@ -138,6 +141,7 @@ import { CampaignsController } from './campaigns/campaigns.controller';
     McpService,
     VoiceService,
     CampaignsService,
+    AdminService,
   ],
   exports: [
     PrismaService,
@@ -171,6 +175,7 @@ import { CampaignsController } from './campaigns/campaigns.controller';
     McpService,
     VoiceService,
     CampaignsService,
+    AdminService,
   ],
 })
 export class AppModule { }

@@ -526,3 +526,79 @@ export class OrbitError extends Error {
     this.name = 'OrbitError';
   }
 }
+
+// ==============================================================================
+// 7. PLATFORM SUPER-ADMIN & CONTROL PLANE (Surface C)
+// ==============================================================================
+
+export interface PlatformTenantSummary {
+  id: string;
+  name: string;
+  slug: string;
+  planTier: string;
+  status: 'ACTIVE' | 'SUSPENDED';
+  creditsRemaining: number;
+  monthlySpendUsd: number;
+  providerCogsUsd: number;
+  grossMarginPct: number;
+  memberCount: number;
+  createdAt: string;
+}
+
+export interface PlatformCircuitBreakerStatus {
+  provider: 'OPENAI' | 'GROQ' | 'OPENROUTER';
+  state: 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+  latencyMs: number;
+  consecutiveFailures: number;
+  lastFailureTime?: string | null;
+  lastSuccessTime?: string | null;
+}
+
+export interface PlatformMarginMetrics {
+  monthlyRecurringRevenueUsd: number;
+  annualRecurringRevenueUsd: number;
+  providerCogsUsd: number;
+  platformGrossMarginPct: number;
+  totalActiveCredits: number;
+  flaggedTenantsCount: number; // Tenants with gross margin < 75%
+  flaggedTenants: Array<{
+    id: string;
+    name: string;
+    grossMarginPct: number;
+    monthlySpendUsd: number;
+    providerCogsUsd: number;
+  }>;
+}
+
+export interface PlatformAuditLogEntry {
+  id: string;
+  operatorEmail: string;
+  action: 'IMPERSONATION_REQUEST' | 'CIRCUIT_BREAKER_TRIP' | 'CIRCUIT_BREAKER_RESET' | 'TENANT_SUSPEND' | 'TENANT_ACTIVATE' | 'CREDIT_ADJUSTMENT';
+  targetTenantId?: string;
+  targetTenantSlug?: string;
+  justification?: string;
+  ticketId?: string;
+  metadata?: Record<string, unknown>;
+  ipAddress?: string;
+  createdAt: string;
+}
+
+export interface ImpersonationRequestInput {
+  tenantId: string;
+  operatorEmail: string;
+  reason: string;
+  ticketId?: string;
+}
+
+export interface ImpersonationResponse {
+  token: string;
+  redirectUrl: string;
+  expiresInSeconds: number;
+  expiresAt: string;
+  impersonatedOrg: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+}
+
