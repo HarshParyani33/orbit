@@ -48,6 +48,8 @@ import { StripeSignatureGuard } from './webhooks/guards/stripe-signature.guard';
 import { DeveloperController } from './developer/developer.controller';
 import { ApiKeysService } from './developer/api-keys.service';
 import { OutboundWebhooksService } from './developer/outbound-webhooks.service';
+import { CommerceService } from './commerce/commerce.service';
+import { CommerceController } from './commerce/commerce.controller';
 
 @Module({
   imports: [
@@ -77,6 +79,7 @@ import { OutboundWebhooksService } from './developer/outbound-webhooks.service';
     BillingController,
     KnowledgeController,
     DeveloperController,
+    CommerceController,
   ],
   providers: [
     PrismaService,
@@ -114,6 +117,7 @@ import { OutboundWebhooksService } from './developer/outbound-webhooks.service';
     KnowledgeService,
     ApiKeysService,
     OutboundWebhooksService,
+    CommerceService,
   ],
   exports: [
     PrismaService,
@@ -141,6 +145,7 @@ import { OutboundWebhooksService } from './developer/outbound-webhooks.service';
     KnowledgeService,
     ApiKeysService,
     OutboundWebhooksService,
+    CommerceService,
   ],
 })
 export class AppModule { }

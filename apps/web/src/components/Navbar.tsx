@@ -1,8 +1,8 @@
 import React from 'react';
 import { useAuth } from '../context/auth-context';
-import { Building2, LogOut, UserCircle2, Inbox, Layers, BookOpen, Users, Settings, Bot, CreditCard } from 'lucide-react';
+import { Building2, LogOut, UserCircle2, Inbox, Layers, BookOpen, Users, Settings, Bot, CreditCard, BarChart3 } from 'lucide-react';
 
-export type NavTab = 'inbox' | 'customers' | 'ai-agents' | 'channels' | 'knowledge' | 'billing' | 'settings';
+export type NavTab = 'inbox' | 'customers' | 'analytics' | 'ai-agents' | 'channels' | 'knowledge' | 'billing' | 'settings';
 
 interface NavbarProps {
   activeTab: NavTab;
@@ -46,6 +46,17 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
             >
               <Users className="w-4 h-4" />
               <span>Customers</span>
+            </button>
+            <button
+              onClick={() => onSelectTab('analytics')}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                activeTab === 'analytics'
+                  ? 'bg-indigo-50 text-indigo-700'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span>Analytics</span>
             </button>
             <button
               onClick={() => onSelectTab('ai-agents')}

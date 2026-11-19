@@ -25,9 +25,11 @@ import {
   AlertTriangle,
   FileText,
   UserCheck,
+  ShoppingBag,
 } from 'lucide-react';
 import { ConversationSummary, MessageSummary, ChannelSummary } from '@orbit/shared';
 import { CustomerProfilePane } from '../components/CustomerProfilePane';
+import { CustomerCommercePane } from '../components/CustomerCommercePane';
 
 type TicketStatusFilter =
   | 'ALL'
@@ -52,6 +54,7 @@ export const InboxPage: React.FC = () => {
   const [replyContent, setReplyContent] = useState('');
   const [composerMode, setComposerMode] = useState<'PUBLIC' | 'NOTE'>('PUBLIC');
   const [isProfilePaneOpen, setIsProfilePaneOpen] = useState(true);
+  const [rightPaneTab, setRightPaneTab] = useState<'PROFILE' | 'COMMERCE'>('COMMERCE');
   const [aiNotice, setAiNotice] = useState<string | null>(null);
   const [isNewConvModalOpen, setIsNewConvModalOpen] = useState(false);
   const [newConvChannelId, setNewConvChannelId] = useState('');
@@ -753,14 +756,62 @@ export const InboxPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Customer Profile Side Pane */}
+              {/* Right Context Side Drawer (Profile & Commerce Orders) */}
               {isProfilePaneOpen && (
-                <CustomerProfilePane
-                  customer={activeConversation.customer}
-                  activeOrgId={activeOrg?.id}
-                  onSelectConversation={(convId) => setSelectedConvId(convId)}
-                  onClose={() => setIsProfilePaneOpen(false)}
-                />
+                <div className="w-80 border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col h-full shrink-0">
+                  {/* Top Switcher Tabs */}
+                  <div className="flex items-center border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 p-1">
+                    <button
+                      onClick={() => setRightPaneTab('COMMERCE')}
+                      className={`flex-1 py-1.5 text-xs font-semibold rounded-md flex items-center justify-center gap-1.5 transition-all ${
+                        rightPaneTab === 'COMMERCE'
+                          ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                          : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      <ShoppingBag className="w-3.5 h-3.5" />
+                      Commerce
+                    </button>
+                    <button
+                      onClick={() => setRightPaneTab('PROFILE')}
+                      className={`flex-1 py-1.5 text-xs font-semibold rounded-md flex items-center justify-center gap-1.5 transition-all ${
+                        rightPaneTab === 'PROFILE'
+                          ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                          : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      <User className="w-3.5 h-3.5" />
+                      Profile
+                    </button>
+                    <button
+                      onClick={() => setIsProfilePaneOpen(false)}
+                      title="Collapse sidebar"
+                      className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 ml-1"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Active Tab Content */}
+                  <div className="flex-1 overflow-hidden">
+                    {rightPaneTab === 'COMMERCE' ? (
+                      <CustomerCommercePane
+                        conversationId={activeConversation.id}
+                        customerId={activeConversation.customer?.id || undefined}
+                        customerEmail={activeConversation.customer?.email || undefined}
+                        customerPhone={activeConversation.customer?.phone || undefined}
+                        activeOrgId={activeOrg?.id}
+                      />
+                    ) : (
+                      <CustomerProfilePane
+                        customer={activeConversation.customer}
+                        activeOrgId={activeOrg?.id}
+                        onSelectConversation={(convId) => setSelectedConvId(convId)}
+                        onClose={() => setIsProfilePaneOpen(false)}
+                      />
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           )}

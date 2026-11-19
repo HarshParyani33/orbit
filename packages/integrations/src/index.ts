@@ -56,5 +56,10 @@ export * from './security/envelope-encryption.service';
 // Voice Provider Contracts & Briefing Types
 export * from './voice/types';
 
+// Commerce & Logistics Adapters
+export * from './commerce/types';
+export * from './commerce/shopify-commerce.adapter';
+export * from './commerce/courier-logistics.adapter';
+
 
 
