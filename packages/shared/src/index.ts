@@ -382,6 +382,45 @@ export interface CommerceOrder {
   shipment?: ShipmentDetails;
 }
 
+export interface SocialPublicReply {
+  id: string;
+  content: string;
+  createdAt: string;
+  repliedBy: 'AI_AGENT' | 'HUMAN';
+}
+
+export interface SocialComment {
+  id: string;
+  postId: string;
+  postTitle: string;
+  postImageUrl?: string;
+  authorUsername: string;
+  authorAvatarUrl?: string;
+  content: string;
+  createdAt: string;
+  sentiment: 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE' | 'TOXIC';
+  status: 'PENDING' | 'REPLIED' | 'ESCALATED_TO_DM' | 'HIDDEN' | 'DELETED';
+  publicReply?: SocialPublicReply;
+  dmConversationId?: string;
+}
+
+export type PulseChartType = 'BAR' | 'LINE' | 'DONUT' | 'TABLE';
+
+export interface PulseChartData {
+  type: PulseChartType;
+  title: string;
+  labels: string[];
+  series: Array<{ name: string; data: number[] }>;
+  rawTable?: Array<Record<string, any>>;
+}
+
+export interface PulseQueryResponse {
+  answer: string;
+  chart?: PulseChartData;
+  suggestedNextQuestions?: string[];
+  executionTimeMs: number;
+}
+
 export interface AuthTokenResponse {
   user: AuthenticatedUser;
   organizations: OrganizationSummary[];

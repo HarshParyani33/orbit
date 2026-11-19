@@ -50,6 +50,12 @@ import { ApiKeysService } from './developer/api-keys.service';
 import { OutboundWebhooksService } from './developer/outbound-webhooks.service';
 import { CommerceService } from './commerce/commerce.service';
 import { CommerceController } from './commerce/commerce.controller';
+import { SocialService } from './social/social.service';
+import { SocialController } from './social/social.controller';
+import { PulseService } from './pulse/pulse.service';
+import { PulseController } from './pulse/pulse.controller';
+import { McpService } from './mcp/mcp.service';
+import { McpController } from './mcp/mcp.controller';
 
 @Module({
   imports: [
@@ -80,6 +86,9 @@ import { CommerceController } from './commerce/commerce.controller';
     KnowledgeController,
     DeveloperController,
     CommerceController,
+    SocialController,
+    PulseController,
+    McpController,
   ],
   providers: [
     PrismaService,
@@ -118,6 +127,9 @@ import { CommerceController } from './commerce/commerce.controller';
     ApiKeysService,
     OutboundWebhooksService,
     CommerceService,
+    SocialService,
+    PulseService,
+    McpService,
   ],
   exports: [
     PrismaService,
@@ -146,6 +158,9 @@ import { CommerceController } from './commerce/commerce.controller';
     ApiKeysService,
     OutboundWebhooksService,
     CommerceService,
+    SocialService,
+    PulseService,
+    McpService,
   ],
 })
 export class AppModule { }

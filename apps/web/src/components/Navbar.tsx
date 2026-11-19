@@ -1,8 +1,8 @@
 import React from 'react';
 import { useAuth } from '../context/auth-context';
-import { Building2, LogOut, UserCircle2, Inbox, Layers, BookOpen, Users, Settings, Bot, CreditCard, BarChart3 } from 'lucide-react';
+import { Building2, LogOut, UserCircle2, Inbox, Layers, BookOpen, Users, Settings, Bot, CreditCard, BarChart3, Share2, Sparkles } from 'lucide-react';
 
-export type NavTab = 'inbox' | 'customers' | 'analytics' | 'ai-agents' | 'channels' | 'knowledge' | 'billing' | 'settings';
+export type NavTab = 'inbox' | 'customers' | 'social' | 'analytics' | 'pulse' | 'ai-agents' | 'channels' | 'knowledge' | 'billing' | 'settings';
 
 interface NavbarProps {
   activeTab: NavTab;
@@ -48,6 +48,17 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
               <span>Customers</span>
             </button>
             <button
+              onClick={() => onSelectTab('social')}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                activeTab === 'social'
+                  ? 'bg-pink-50 text-pink-700 font-bold'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <Share2 className="w-4 h-4 text-pink-600" />
+              <span>Social</span>
+            </button>
+            <button
               onClick={() => onSelectTab('analytics')}
               className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                 activeTab === 'analytics'
@@ -57,6 +68,17 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
             >
               <BarChart3 className="w-4 h-4" />
               <span>Analytics</span>
+            </button>
+            <button
+              onClick={() => onSelectTab('pulse')}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                activeTab === 'pulse'
+                  ? 'bg-purple-50 text-purple-700 font-bold'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <Sparkles className="w-4 h-4 text-purple-600" />
+              <span>Pulse BI</span>
             </button>
             <button
               onClick={() => onSelectTab('ai-agents')}
