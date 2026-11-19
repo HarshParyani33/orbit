@@ -49,3 +49,7 @@ Thumbs.db
 tmp/
 temp/
 
+# References and Design Assets
+references/
+
+
