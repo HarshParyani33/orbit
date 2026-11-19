@@ -143,7 +143,7 @@ Hosting architecture for `apps/admin` (Surface C).
 ### Technical Recommendation
 **Option A (Fully Segregated Subdomain `admin.orbit.com`):** Absolute prerequisite for SOC2 compliance and zero-trust security.
 
-*Sign-Off Status:* `PENDING OWNER APPROVAL`
+*Sign-Off Status:* `APPROVED BY PRODUCT OWNER`
 
 ---
 
