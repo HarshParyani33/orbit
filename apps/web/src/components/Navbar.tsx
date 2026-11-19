@@ -1,10 +1,12 @@
 import React from 'react';
 import { useAuth } from '../context/auth-context';
-import { Building2, LogOut, UserCircle2, Inbox, Layers, BookOpen } from 'lucide-react';
+import { Building2, LogOut, UserCircle2, Inbox, Layers, BookOpen, Users, Settings } from 'lucide-react';
+
+export type NavTab = 'inbox' | 'customers' | 'channels' | 'knowledge' | 'settings';
 
 interface NavbarProps {
-  activeTab: 'inbox' | 'channels' | 'knowledge';
-  onSelectTab: (tab: 'inbox' | 'channels' | 'knowledge') => void;
+  activeTab: NavTab;
+  onSelectTab: (tab: NavTab) => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
@@ -35,6 +37,17 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
               <span>Inbox</span>
             </button>
             <button
+              onClick={() => onSelectTab('customers')}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                activeTab === 'customers'
+                  ? 'bg-indigo-50 text-indigo-700'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              <span>Customers</span>
+            </button>
+            <button
               onClick={() => onSelectTab('channels')}
               className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                 activeTab === 'channels'
@@ -43,7 +56,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
               }`}
             >
               <Layers className="w-4 h-4" />
-              <span>Channels & Settings</span>
+              <span>Channels</span>
             </button>
             <button
               onClick={() => onSelectTab('knowledge')}
@@ -55,6 +68,17 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
             >
               <BookOpen className="w-4 h-4" />
               <span>Knowledge Base</span>
+            </button>
+            <button
+              onClick={() => onSelectTab('settings')}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                activeTab === 'settings'
+                  ? 'bg-indigo-50 text-indigo-700'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <Settings className="w-4 h-4" />
+              <span>Settings</span>
             </button>
           </nav>
 

@@ -13,6 +13,7 @@ import { RateLimitGuard } from './auth/rate-limit.guard';
 import { TenantTransactionRunner } from './tenancy/tenant-transaction-runner';
 import { TenantGuard } from './tenancy/tenant.guard';
 import { OrganizationsService } from './organizations/organizations.service';
+import { BusinessHoursService } from './organizations/business-hours.service';
 import { OrganizationsController } from './organizations/organizations.controller';
 import { ChannelsService } from './channels/channels.service';
 import { ChannelsController } from './channels/channels.controller';
@@ -91,6 +92,7 @@ import { StripeSignatureGuard } from './webhooks/guards/stripe-signature.guard';
     TenantTransactionRunner,
     TenantGuard,
     OrganizationsService,
+    BusinessHoursService,
     ChannelsService,
     ConversationsService,
     CustomersService,
@@ -116,6 +118,7 @@ import { StripeSignatureGuard } from './webhooks/guards/stripe-signature.guard';
     TenantTransactionRunner,
     TenantGuard,
     CsrfGuard,
+    BusinessHoursService,
     ConversationsService,
     CustomersService,
     AiService,

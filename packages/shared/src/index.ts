@@ -22,9 +22,15 @@ export enum OrgStatus {
 }
 
 export enum ConversationStatus {
+  IN_QUEUE = 'IN_QUEUE',
   OPEN = 'OPEN',
-  RESOLVED = 'RESOLVED',
+  REOPENED = 'REOPENED',
   SNOOZED = 'SNOOZED',
+  AWAITING = 'AWAITING',
+  INVESTIGATING = 'INVESTIGATING',
+  ESCALATED = 'ESCALATED',
+  RESOLVED = 'RESOLVED',
+  CLOSED = 'CLOSED',
 }
 
 export enum SenderType {
@@ -32,6 +38,26 @@ export enum SenderType {
   AGENT = 'AGENT',
   AI = 'AI',
   SYSTEM = 'SYSTEM',
+  NOTE = 'NOTE',
+}
+
+export enum TicketPriority {
+  LOW = 'LOW',
+  MEDIUM = 'MEDIUM',
+  HIGH = 'HIGH',
+  URGENT = 'URGENT',
+}
+
+export interface BusinessHoursSchedule {
+  timezone: string;
+  schedule: {
+    dayOfWeek: number; // 0=Sunday, 1=Monday, ..., 6=Saturday
+    openTime: string;  // HH:mm (e.g. "09:00")
+    closeTime: string; // HH:mm (e.g. "18:00")
+    closed: boolean;
+  }[];
+  outOfHoursMessage: string;
+  enabled: boolean;
 }
 
 export enum ChannelProvider {

@@ -82,12 +82,24 @@ export const createConversationSchema = z.object({
   initialMessage: z.string().min(1).max(10000).optional(),
 });
 
+export const conversationStatuses = [
+  'IN_QUEUE',
+  'OPEN',
+  'REOPENED',
+  'SNOOZED',
+  'AWAITING',
+  'INVESTIGATING',
+  'ESCALATED',
+  'RESOLVED',
+  'CLOSED',
+] as const;
+
 export const updateConversationStatusSchema = z.object({
-  status: z.enum(['OPEN', 'RESOLVED', 'SNOOZED']),
+  status: z.enum(conversationStatuses),
 });
 
 export const listConversationsQuerySchema = z.object({
-  status: z.enum(['OPEN', 'RESOLVED', 'SNOOZED']).optional(),
+  status: z.enum(conversationStatuses).optional(),
   channelId: z.string().uuid().optional(),
   customerId: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -97,7 +109,7 @@ export const listConversationsQuerySchema = z.object({
 // Message Schemas
 export const createMessageSchema = z.object({
   content: z.string().min(1, 'Message content cannot be empty').max(10000),
-  senderType: z.enum(['CUSTOMER', 'AGENT', 'AI', 'SYSTEM']).default('AGENT'),
+  senderType: z.enum(['CUSTOMER', 'AGENT', 'AI', 'SYSTEM', 'NOTE']).default('AGENT'),
 });
 
 // Customer & Identity Schemas
@@ -256,9 +268,25 @@ export const searchKnowledgeSchema = z.object({
   minSimilarity: z.coerce.number().min(0).max(1).default(0.7),
 });
 
+export const updateBusinessHoursSchema = z.object({
+  timezone: z.string().default('UTC'),
+  schedule: z.array(
+    z.object({
+      dayOfWeek: z.number().int().min(0).max(6),
+      openTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Invalid time format (HH:mm)'),
+      closeTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Invalid time format (HH:mm)'),
+      closed: z.boolean(),
+    })
+  ).length(7),
+  outOfHoursMessage: z.string().max(1000).default('Thank you for reaching out. We are currently outside our operating business hours and will reply as soon as our team opens.'),
+  enabled: z.boolean().default(true),
+});
+
+export type UpdateBusinessHoursInput = z.infer<typeof updateBusinessHoursSchema>;
 export type CreateKnowledgeDocumentInput = z.infer<typeof createKnowledgeDocumentSchema>;
 export type ListKnowledgeDocumentsQuery = z.infer<typeof listKnowledgeDocumentsQuerySchema>;
 export type SearchKnowledgeInput = z.infer<typeof searchKnowledgeSchema>;
+
 
 
 

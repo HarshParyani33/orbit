@@ -4,13 +4,15 @@ import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { InboxPage } from './pages/InboxPage';
+import { CustomersPage } from './pages/CustomersPage';
 import { KnowledgeBasePage } from './pages/KnowledgeBasePage';
-import { Navbar } from './components/Navbar';
+import { SettingsPage } from './pages/SettingsPage';
+import { Navbar, NavTab } from './components/Navbar';
 
 export const App: React.FC = () => {
   const { user, isLoading } = useAuth();
   const [authView, setAuthView] = useState<'login' | 'register'>('login');
-  const [activeTab, setActiveTab] = useState<'inbox' | 'channels' | 'knowledge'>('inbox');
+  const [activeTab, setActiveTab] = useState<NavTab>('inbox');
 
   if (isLoading) {
     return (
@@ -35,8 +37,10 @@ export const App: React.FC = () => {
       <Navbar activeTab={activeTab} onSelectTab={setActiveTab} />
       <main className="flex-1">
         {activeTab === 'inbox' && <InboxPage />}
+        {activeTab === 'customers' && <CustomersPage />}
         {activeTab === 'channels' && <DashboardPage />}
         {activeTab === 'knowledge' && <KnowledgeBasePage />}
+        {activeTab === 'settings' && <SettingsPage />}
       </main>
     </div>
   );

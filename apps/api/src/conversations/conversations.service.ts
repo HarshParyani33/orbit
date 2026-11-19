@@ -239,7 +239,7 @@ export class ConversationsService {
   async updateConversationStatus(
     organizationId: string,
     conversationId: string,
-    status: 'OPEN' | 'RESOLVED' | 'SNOOZED'
+    status: string
   ) {
     const updated = await this.tenantRunner.runWithTenant(organizationId, async (tx) => {
       const existing = await tx.conversation.findFirst({
