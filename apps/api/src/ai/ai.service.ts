@@ -135,7 +135,7 @@ export class AiService {
     // =========================================================================
     // PHASE 1: PRE-FLIGHT DATABASE TRANSACTION (Scoped, Short-lived)
     // =========================================================================
-    const preflight = await this.tenantRunner.runWithTenant(organizationId, async (tx) => {
+    const preflight = await this.tenantRunner.runWithTenant<any>(organizationId, async (tx) => {
       // 1. Fetch conversation and messages
       const conversation = await tx.conversation.findFirst({
         where: { id: conversationId, organizationId },
@@ -188,6 +188,24 @@ export class AiService {
         throw new BadRequestException('No active AI configuration found for this organization');
       }
 
+      // 3.5. Wallet & Credit Balance Check (Fail-Closed Protocol)
+      const subscription = await tx.subscription.findUnique({
+        where: { organizationId },
+      });
+
+      if (subscription && subscription.aiTokenAllowance <= 0) {
+        return {
+          bypassed: true as const,
+          bypassPayload: {
+            bypassed: true,
+            reason: 'INSUFFICIENT_CREDITS',
+            message:
+              'AI generation bypassed: workspace AI credit balance is exhausted. Escalated to human agent queue.',
+            escalatedToHuman: true,
+          },
+        };
+      }
+
       // 4. Pre-Flight Pricing Schedule Resolution (Fail-Closed Protocol)
       const pricing = await tx.aiModelPricingSchedule.findFirst({
         where: {
@@ -205,10 +223,41 @@ export class AiService {
         );
       }
 
-      // 5. Prompt-Injection & Framing Defense
-      const policyRules = Array.isArray(aiConfig.policyRules)
-        ? (aiConfig.policyRules as string[])
-        : [];
+      // 5. Response Guard & Policy Safety Checks
+      let competitorBlacklist: string[] = [];
+      let isSupervisedReview = false;
+
+      if (Array.isArray(aiConfig.policyRules)) {
+        // Simple string array format
+      } else if (aiConfig.policyRules && typeof aiConfig.policyRules === 'object') {
+        const rulesObj = aiConfig.policyRules as Record<string, any>;
+        competitorBlacklist = Array.isArray(rulesObj.competitors) ? rulesObj.competitors : [];
+        isSupervisedReview = Boolean(rulesObj.supervisedReview);
+      }
+
+      // Check incoming customer query for competitor mentions
+      const lastCustMessage = [...conversation.messages]
+        .reverse()
+        .find((m) => m.senderType === 'CUSTOMER');
+
+      if (lastCustMessage && competitorBlacklist.length > 0) {
+        const lowerContent = lastCustMessage.content.toLowerCase();
+        const matchedCompetitor = competitorBlacklist.find((comp) =>
+          lowerContent.includes(comp.toLowerCase())
+        );
+
+        if (matchedCompetitor) {
+          return {
+            bypassed: true as const,
+            bypassPayload: {
+              bypassed: true,
+              reason: 'RESPONSE_GUARD_COMPETITOR_FLAG',
+              message: `Customer message mentions competitor "${matchedCompetitor}". Escalated to human agent review.`,
+              escalatedToHuman: true,
+            },
+          };
+        }
+      }
 
       // 5.1 Semantic Knowledge Retrieval & Grounding
       let dynamicInstructions = aiConfig.systemInstructions;
@@ -304,7 +353,7 @@ export class AiService {
         pricing,
         promptMessages,
         dynamicInstructions,
-        policyRules,
+        policyRules: aiConfig.policyRules,
         chunkMap,
       };
     });
@@ -447,6 +496,20 @@ export class AiService {
           billableAmountUsd: incurredCostUsd,
         },
       });
+
+      // 3.6 Atomically decrement tenant subscription token balance
+      const existingSub = await tx.subscription.findUnique({
+        where: { organizationId },
+      });
+      if (existingSub) {
+        await tx.subscription.update({
+          where: { organizationId },
+          data: {
+            aiTokenAllowance: Math.max(0, existingSub.aiTokenAllowance - completion.totalTokens),
+            updatedAt: new Date(),
+          },
+        });
+      }
 
       // 3.6 Mark AI request COMPLETED
       await tx.aiRequest.update({

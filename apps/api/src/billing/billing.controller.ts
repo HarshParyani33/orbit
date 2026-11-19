@@ -51,4 +51,28 @@ export class BillingController {
       data: updated,
     };
   }
+
+  @Get('wallet')
+  async getWallet(@CurrentTenant() tenant: TenantContext): Promise<ApiResponse> {
+    const wallet = await this.billingService.getWallet(tenant.orgId);
+    return {
+      success: true,
+      data: wallet,
+    };
+  }
+
+  @Post('top-up')
+  async addTopUp(
+    @CurrentTenant() tenant: TenantContext,
+    @Body('credits') credits: number
+  ): Promise<ApiResponse> {
+    if (typeof credits !== 'number' || credits <= 0) {
+      throw new BadRequestException('Credits must be a positive integer');
+    }
+    const updated = await this.billingService.addTopUpCredits(tenant.orgId, credits);
+    return {
+      success: true,
+      data: updated,
+    };
+  }
 }

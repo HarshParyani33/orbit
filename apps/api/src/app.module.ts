@@ -45,6 +45,9 @@ import { KnowledgeService } from './knowledge/knowledge.service';
 import { KnowledgeController } from './knowledge/knowledge.controller';
 import { StripeIngestionService } from './webhooks/stripe-ingestion.service';
 import { StripeSignatureGuard } from './webhooks/guards/stripe-signature.guard';
+import { DeveloperController } from './developer/developer.controller';
+import { ApiKeysService } from './developer/api-keys.service';
+import { OutboundWebhooksService } from './developer/outbound-webhooks.service';
 
 @Module({
   imports: [
@@ -73,6 +76,7 @@ import { StripeSignatureGuard } from './webhooks/guards/stripe-signature.guard';
     AttachmentsController,
     BillingController,
     KnowledgeController,
+    DeveloperController,
   ],
   providers: [
     PrismaService,
@@ -108,6 +112,8 @@ import { StripeSignatureGuard } from './webhooks/guards/stripe-signature.guard';
     BillingService,
     StripeIngestionService,
     KnowledgeService,
+    ApiKeysService,
+    OutboundWebhooksService,
   ],
   exports: [
     PrismaService,
@@ -133,6 +139,8 @@ import { StripeSignatureGuard } from './webhooks/guards/stripe-signature.guard';
     BillingService,
     StripeIngestionService,
     KnowledgeService,
+    ApiKeysService,
+    OutboundWebhooksService,
   ],
 })
 export class AppModule { }

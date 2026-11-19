@@ -176,4 +176,48 @@ export class BillingService {
       });
     });
   }
+
+  /**
+   * Retrieve wallet balance and credit status for active tenant.
+   */
+  async getWallet(organizationId: string) {
+    const sub = await this.getSubscription(organizationId);
+    return {
+      organizationId,
+      planTier: sub.planTier,
+      status: sub.status,
+      aiTokenAllowance: sub.aiTokenAllowance,
+      currentPeriodStart: sub.currentPeriodStart,
+      currentPeriodEnd: sub.currentPeriodEnd,
+      cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+      isExhausted: sub.aiTokenAllowance <= 0,
+    };
+  }
+
+  /**
+   * Add non-expiring purchased top-up credits to tenant wallet.
+   */
+  async addTopUpCredits(organizationId: string, credits: number) {
+    if (!credits || credits <= 0) {
+      throw new BadRequestException('Top-up credit count must be greater than zero');
+    }
+
+    return this.tenantRunner.runWithTenant(organizationId, async (tx) => {
+      const sub = await tx.subscription.findUnique({
+        where: { organizationId },
+      });
+
+      if (!sub) {
+        throw new NotFoundException('Subscription not found for this organization');
+      }
+
+      return tx.subscription.update({
+        where: { organizationId },
+        data: {
+          aiTokenAllowance: { increment: credits },
+          updatedAt: new Date(),
+        },
+      });
+    });
+  }
 }

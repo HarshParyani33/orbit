@@ -1,8 +1,8 @@
 import React from 'react';
 import { useAuth } from '../context/auth-context';
-import { Building2, LogOut, UserCircle2, Inbox, Layers, BookOpen, Users, Settings } from 'lucide-react';
+import { Building2, LogOut, UserCircle2, Inbox, Layers, BookOpen, Users, Settings, Bot, CreditCard } from 'lucide-react';
 
-export type NavTab = 'inbox' | 'customers' | 'channels' | 'knowledge' | 'settings';
+export type NavTab = 'inbox' | 'customers' | 'ai-agents' | 'channels' | 'knowledge' | 'billing' | 'settings';
 
 interface NavbarProps {
   activeTab: NavTab;
@@ -48,6 +48,17 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
               <span>Customers</span>
             </button>
             <button
+              onClick={() => onSelectTab('ai-agents')}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                activeTab === 'ai-agents'
+                  ? 'bg-purple-50 text-purple-700 font-bold'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <Bot className="w-4 h-4 text-purple-600" />
+              <span>AI Studio</span>
+            </button>
+            <button
               onClick={() => onSelectTab('channels')}
               className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                 activeTab === 'channels'
@@ -68,6 +79,17 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
             >
               <BookOpen className="w-4 h-4" />
               <span>Knowledge Base</span>
+            </button>
+            <button
+              onClick={() => onSelectTab('billing')}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                activeTab === 'billing'
+                  ? 'bg-indigo-50 text-indigo-700'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <CreditCard className="w-4 h-4" />
+              <span>Billing & Wallet</span>
             </button>
             <button
               onClick={() => onSelectTab('settings')}

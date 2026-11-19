@@ -16,6 +16,10 @@ import {
   UserPlus,
   Globe,
   Radio,
+  Key,
+  Webhook,
+  Copy,
+  Trash2,
 } from 'lucide-react';
 import { BusinessHoursSchedule, Role } from '@orbit/shared';
 
@@ -48,7 +52,13 @@ export const SettingsPage: React.FC = () => {
   const { activeOrg, user } = useAuth();
   const queryClient = useQueryClient();
 
-  const [activeTab, setActiveTab] = useState<'business-hours' | 'members' | 'general'>('business-hours');
+  const [activeTab, setActiveTab] = useState<'business-hours' | 'members' | 'developer' | 'general'>('business-hours');
+
+  // Developer Keys & Webhooks State
+  const [newKeyName, setNewKeyName] = useState('');
+  const [rawGeneratedKey, setRawGeneratedKey] = useState<string | null>(null);
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [copiedNotice, setCopiedNotice] = useState(false);
 
   // Business Hours State
   const [schedule, setSchedule] = useState<BusinessHoursSchedule | null>(null);
@@ -141,6 +151,56 @@ export const SettingsPage: React.FC = () => {
     },
   });
 
+  // Developer API Keys Query & Mutations
+  const { data: apiKeys = [], refetch: refetchKeys } = useQuery<{ id: string; name: string; prefix: string; scopes: string[]; createdAt: string }[]>({
+    queryKey: ['developer-keys', activeOrg?.id],
+    queryFn: () => apiRequest('/api/developer/keys'),
+    enabled: !!activeOrg?.id && activeTab === 'developer',
+  });
+
+  const { data: webhooks = [], refetch: refetchWebhooks } = useQuery<{ id: string; targetUrl: string; secret: string; events: string[]; createdAt: string }[]>({
+    queryKey: ['developer-webhooks', activeOrg?.id],
+    queryFn: () => apiRequest('/api/developer/webhooks'),
+    enabled: !!activeOrg?.id && activeTab === 'developer',
+  });
+
+  const createKeyMutation = useMutation({
+    mutationFn: (name: string) =>
+      apiRequest<{ id: string; name: string; key: string; prefix: string }>('/api/developer/keys', {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: (data) => {
+      setRawGeneratedKey(data.key);
+      setNewKeyName('');
+      refetchKeys();
+    },
+  });
+
+  const revokeKeyMutation = useMutation({
+    mutationFn: (keyId: string) =>
+      apiRequest(`/api/developer/keys/${keyId}`, { method: 'DELETE' }),
+    onSuccess: () => refetchKeys(),
+  });
+
+  const subscribeWebhookMutation = useMutation({
+    mutationFn: (targetUrl: string) =>
+      apiRequest('/api/developer/webhooks', {
+        method: 'POST',
+        body: JSON.stringify({ targetUrl }),
+      }),
+    onSuccess: () => {
+      setWebhookUrl('');
+      refetchWebhooks();
+    },
+  });
+
+  const deleteWebhookMutation = useMutation({
+    mutationFn: (id: string) =>
+      apiRequest(`/api/developer/webhooks/${id}`, { method: 'DELETE' }),
+    onSuccess: () => refetchWebhooks(),
+  });
+
   const handleDayChange = (
     dayIndex: number,
     field: 'openTime' | 'closeTime' | 'closed',
@@ -210,6 +270,18 @@ export const SettingsPage: React.FC = () => {
         >
           <Users className="w-4 h-4" />
           <span>Team & Roles</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('developer')}
+          className={`inline-flex items-center space-x-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors ${
+            activeTab === 'developer'
+              ? 'border-indigo-600 text-indigo-600'
+              : 'border-transparent text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Key className="w-4 h-4" />
+          <span>API Keys & Webhooks</span>
         </button>
 
         <button
@@ -466,6 +538,163 @@ export const SettingsPage: React.FC = () => {
                     >
                       {m.role}
                     </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB: Developer API Keys & Webhooks */}
+      {activeTab === 'developer' && (
+        <div className="space-y-6">
+          {/* API Keys Card */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs space-y-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <Key className="w-4 h-4 text-indigo-600" />
+                  <span>Workspace REST API Keys</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Cryptographically hashed API keys for headless API access and external workflows.
+                </p>
+              </div>
+            </div>
+
+            {/* Generated Raw Key Alert */}
+            {rawGeneratedKey && (
+              <div className="p-4 rounded-xl bg-amber-50 border-2 border-amber-300 space-y-2 text-xs">
+                <div className="flex items-center justify-between font-bold text-amber-900">
+                  <span>New API Key Generated — Copy Now (Will Not Be Shown Again)</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(rawGeneratedKey);
+                      setCopiedNotice(true);
+                      setTimeout(() => setCopiedNotice(false), 2000);
+                    }}
+                    className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-200 hover:bg-amber-300 rounded text-amber-900 text-xs font-semibold"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>{copiedNotice ? 'Copied!' : 'Copy Key'}</span>
+                  </button>
+                </div>
+                <div className="font-mono bg-white p-2 rounded border border-amber-200 break-all text-slate-800">
+                  {rawGeneratedKey}
+                </div>
+              </div>
+            )}
+
+            {/* Create Key Form */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!newKeyName.trim()) return;
+                createKeyMutation.mutate(newKeyName.trim());
+              }}
+              className="flex items-center gap-3"
+            >
+              <input
+                type="text"
+                value={newKeyName}
+                onChange={(e) => setNewKeyName(e.target.value)}
+                placeholder="e.g. Production CI Ingest Key"
+                className="w-full sm:w-72 px-3 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <button
+                type="submit"
+                disabled={!newKeyName.trim() || createKeyMutation.isPending}
+                className="inline-flex items-center space-x-1 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm disabled:opacity-50"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Create Key</span>
+              </button>
+            </form>
+
+            {/* API Keys Table */}
+            <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100">
+              {apiKeys.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-400">No API keys created yet.</div>
+              ) : (
+                apiKeys.map((k) => (
+                  <div key={k.id} className="p-3.5 flex items-center justify-between text-xs">
+                    <div className="space-y-0.5">
+                      <div className="font-semibold text-slate-900">{k.name}</div>
+                      <div className="font-mono text-[11px] text-slate-400">{k.prefix}</div>
+                    </div>
+                    <div className="flex items-center space-x-3">
+                      <span className="text-[10px] text-slate-400">
+                        Created {new Date(k.createdAt).toLocaleDateString()}
+                      </span>
+                      <button
+                        onClick={() => revokeKeyMutation.mutate(k.id)}
+                        className="text-rose-600 hover:text-rose-800 p-1"
+                        title="Revoke Key"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Outbound Webhooks Card */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs space-y-5">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Webhook className="w-4 h-4 text-indigo-600" />
+                <span>Outbound Webhook Subscriptions</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Real-time event dispatches signed with HMAC-SHA256 headers.
+              </p>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!webhookUrl.trim()) return;
+                subscribeWebhookMutation.mutate(webhookUrl.trim());
+              }}
+              className="flex items-center gap-3"
+            >
+              <input
+                type="url"
+                value={webhookUrl}
+                onChange={(e) => setWebhookUrl(e.target.value)}
+                placeholder="https://your-domain.com/webhook"
+                required
+                className="w-full sm:w-96 px-3 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <button
+                type="submit"
+                disabled={!webhookUrl.trim() || subscribeWebhookMutation.isPending}
+                className="inline-flex items-center space-x-1 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm disabled:opacity-50"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Subscribe Webhook</span>
+              </button>
+            </form>
+
+            <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100">
+              {webhooks.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-400">No webhook subscriptions active.</div>
+              ) : (
+                webhooks.map((sub) => (
+                  <div key={sub.id} className="p-3.5 flex items-center justify-between text-xs">
+                    <div className="space-y-0.5">
+                      <div className="font-mono text-slate-900 font-semibold">{sub.targetUrl}</div>
+                      <div className="text-[10px] text-slate-400 font-mono">Secret: {sub.secret.slice(0, 12)}…</div>
+                    </div>
+                    <button
+                      onClick={() => deleteWebhookMutation.mutate(sub.id)}
+                      className="text-rose-600 hover:text-rose-800 p-1"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 ))
               )}
