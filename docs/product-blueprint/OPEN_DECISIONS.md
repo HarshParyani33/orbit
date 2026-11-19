@@ -21,9 +21,9 @@ Orbit requires a high-performance, SEO-optimized public website (Surface A) that
     *   *Cons:* Separate templating syntax; cannot share full component trees directly without adaptation.
 
 ### Technical Recommendation
-**Option A (Next.js 14 App Router):** Monorepo code sharing with `packages/ui` and `packages/validation` heavily outweighs the marginal performance difference.
+**Approved: Next.js App Router for `apps/marketing`.** Select a currently supported stable Next.js version when implementation begins; do not pin the product decision to Next.js 14.
 
-*Sign-Off Status:* `PENDING OWNER APPROVAL`
+*Sign-Off Status:* `APPROVED BY PRODUCT OWNER`
 
 ---
 
@@ -41,9 +41,9 @@ Voice AI support requires sub-second conversational latency (<1,200ms) with seam
     *   *Cons:* High vendor lock-in; significantly higher per-minute cost (\$0.08 - \$0.14/min), compressing gross margins below 60%.
 
 ### Technical Recommendation
-**Option A (Twilio Voice SIP + Groq Whisper + Cartesia):** Preserves target gross margins (>80%) and enables custom written briefing generation upon human transfer.
+**Approved direction: defer voice implementation to a later milestone while preparing provider-neutral voice interfaces now.** Do not commit to Twilio, Groq Whisper or Cartesia as final vendors until a later cost, latency, regional availability and quality evaluation.
 
-*Sign-Off Status:* `PENDING OWNER APPROVAL`
+*Sign-Off Status:* `APPROVED — DEFER IMPLEMENTATION; ARCHITECTURE PREPARATION ONLY`
 
 ---
 
@@ -61,9 +61,9 @@ Knowledge retrieval powers the autonomous Support Agent and Pulse AI. Orbit curr
     *   *Cons:* Additional cloud cost (\$70 - \$200/mo); duplicate data synchronization; tenant isolation must be manually enforced in external application logic.
 
 ### Technical Recommendation
-**Option A (Native PostgreSQL `pgvector`):** At current and projected scale (<1M chunks across 500 tenants), pgvector using `HNSW` indexes performs sub-25ms vector searches and keeps RLS security uncompromised.
+**Approved: Native PostgreSQL `pgvector`.** Keep vectors within the tenant-scoped PostgreSQL security boundary; validate performance with representative data before making latency guarantees.
 
-*Sign-Off Status:* `PENDING OWNER APPROVAL`
+*Sign-Off Status:* `APPROVED BY PRODUCT OWNER`
 
 ---
 
@@ -81,9 +81,9 @@ How users navigate to their isolated business workspace.
     *   *Cons:* Complex cookie sharing for cross-workspace users; wildcard SSL management; CORS complexity across origins.
 
 ### Technical Recommendation
-**Option A (Path-Based Routing with Reserved Slugs):** Simplifies multi-tab session coordination, simplifies authentication cookies, and matches modern SaaS standards (Notion, Slack).
+**Approved: Path-based workspace routing with reserved slugs.**
 
-*Sign-Off Status:* `PENDING OWNER APPROVAL`
+*Sign-Off Status:* `APPROVED BY PRODUCT OWNER`
 
 ---
 
@@ -101,9 +101,9 @@ Connecting to 57+ platforms across Commerce, Shipping, Returns, and Payments.
     *   *Cons:* Prohibitive enterprise pricing (\$500 - \$2,000/mo base + per-sync fees); generic lowest-common-denominator data schemas that lack custom shipping and return actions.
 
 ### Technical Recommendation
-**Option A (Custom Native Connectors):** Essential DTC actions (e.g., Shiprocket NDR re-attempts, Razorpay partial refunds) are unsupported by generic aggregators. Native connectors preserve our core competitive advantage.
+**Approved: Native integration adapters in `packages/integrations`.** Keep provider-specific capabilities behind stable interfaces; prioritize connectors based on customer demand and maintenance cost.
 
-*Sign-Off Status:* `PENDING OWNER APPROVAL`
+*Sign-Off Status:* `APPROVED BY PRODUCT OWNER`
 
 ---
 
@@ -121,9 +121,9 @@ Merchants on the Growth plan (\$99.99/mo) receive 7,500 monthly subscription cre
     *   *Cons:* Requires automated reminder emails; friction with enterprise procurement.
 
 ### Technical Recommendation
-**Option A (Subscription Resets Monthly; Top-Ups Never Expire):** Maximizes merchant trust and conversion during self-serve upgrades.
+**Approved: Subscription credits reset monthly; purchased top-up credits do not expire.** Maintain separate ledger buckets and define refund, chargeback, account-closure and regulatory treatment before launch.
 
-*Sign-Off Status:* `PENDING OWNER APPROVAL`
+*Sign-Off Status:* `APPROVED BY PRODUCT OWNER`
 
 ---
 
@@ -133,7 +133,7 @@ Merchants on the Growth plan (\$99.99/mo) receive 7,500 monthly subscription cre
 Hosting architecture for `apps/admin` (Surface C).
 
 ### Options
-*   **Option A: Fully Segregated Subdomain & Port (`admin.orbit.com`):**
+*   **Approved: Fully segregated owner-admin application on `admin.orbit.com`.**
     *   *Pros:* Physical and network isolation; distinct IP allowlists (Cloudflare Access / VPN required); separate JWT secrets and separate database role (`orbit_admin`).
     *   *Cons:* Requires separate deployment pipeline and DNS records.
 *   **Option B: Internal Protected Route inside Workspace App (`app.orbit.com/admin`):**
@@ -151,10 +151,10 @@ Hosting architecture for `apps/admin` (Surface C).
 
 | Decision Area | Recommended Option | Risk Level | Cost Impact | Product Owner Approval |
 | :--- | :--- | :---: | :---: | :---: |
-| **1. Marketing Site** | Next.js 14 App Router | Low | \$0 (Shared compute) | `PENDING` |
-| **2. Voice AI Engine** | Twilio SIP + Groq Whisper + Cartesia | Medium | 80%+ Gross Margin | `PENDING` |
-| **3. Vector Retrieval** | Native PostgreSQL pgvector | Low | \$0 (In-database) | `PENDING` |
-| **4. Ingress Routing** | Path-based (`app.orbit.com/:slug`) | Low | \$0 | `PENDING` |
-| **5. Integrations** | Custom Native Connectors | Medium | Saves \$1,500+/mo | `PENDING` |
-| **6. Credit Expiry** | Monthly Sub Resets / Top-Ups Never Expire | Low | None | `PENDING` |
-| **7. Admin App Hosting**| Dedicated `admin.orbit.com` with Zero-Trust | Low | \$0 | `PENDING` |
+| **1. Marketing Site** | Next.js App Router (supported stable version) | Low | Depends on hosting | `APPROVED` |
+| **2. Voice AI Engine** | Defer implementation; provider-neutral interfaces now | Medium | To be evaluated later | `APPROVED — DEFERRED` |
+| **3. Vector Retrieval** | Native PostgreSQL pgvector | Low | Included in database hosting | `APPROVED` |
+| **4. Ingress Routing** | Path-based (`app.orbit.com/:slug`) | Low | Depends on hosting | `APPROVED` |
+| **5. Integrations** | Native provider adapters | Medium | Connector-dependent | `APPROVED` |
+| **6. Credit Expiry** | Monthly subscription reset / purchased top-ups never expire | Medium | Credit liability must be tracked | `APPROVED` |
+| **7. Admin App Hosting**| Separate protected `admin.orbit.com` application | Low | Depends on hosting and access controls | `APPROVED` |
