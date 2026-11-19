@@ -55,6 +55,7 @@ export * from './security/envelope-encryption.service';
 
 // Voice Provider Contracts & Briefing Types
 export * from './voice/types';
+export * from './voice/twilio-voice.provider';
 
 // Commerce & Logistics Adapters
 export * from './commerce/types';

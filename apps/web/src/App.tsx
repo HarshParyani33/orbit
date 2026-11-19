@@ -8,6 +8,7 @@ import { CustomersPage } from './pages/CustomersPage';
 import { SocialInboxPage } from './pages/SocialInboxPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { PulseAiPage } from './pages/PulseAiPage';
+import { CampaignsPage } from './pages/CampaignsPage';
 import { AiAgentsPage } from './pages/AiAgentsPage';
 import { KnowledgeBasePage } from './pages/KnowledgeBasePage';
 import { BillingPage } from './pages/BillingPage';
@@ -46,6 +47,7 @@ export const App: React.FC = () => {
         {activeTab === 'social' && <SocialInboxPage />}
         {activeTab === 'analytics' && <AnalyticsPage />}
         {activeTab === 'pulse' && <PulseAiPage />}
+        {activeTab === 'campaigns' && <CampaignsPage />}
         {activeTab === 'ai-agents' && <AiAgentsPage />}
         {activeTab === 'channels' && <DashboardPage />}
         {activeTab === 'knowledge' && <KnowledgeBasePage />}

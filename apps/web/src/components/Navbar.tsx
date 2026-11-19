@@ -1,8 +1,8 @@
 import React from 'react';
 import { useAuth } from '../context/auth-context';
-import { Building2, LogOut, UserCircle2, Inbox, Layers, BookOpen, Users, Settings, Bot, CreditCard, BarChart3, Share2, Sparkles } from 'lucide-react';
+import { Building2, LogOut, UserCircle2, Inbox, Layers, BookOpen, Users, Settings, Bot, CreditCard, BarChart3, Share2, Sparkles, Send } from 'lucide-react';
 
-export type NavTab = 'inbox' | 'customers' | 'social' | 'analytics' | 'pulse' | 'ai-agents' | 'channels' | 'knowledge' | 'billing' | 'settings';
+export type NavTab = 'inbox' | 'customers' | 'social' | 'analytics' | 'pulse' | 'campaigns' | 'ai-agents' | 'channels' | 'knowledge' | 'billing' | 'settings';
 
 interface NavbarProps {
   activeTab: NavTab;
@@ -79,6 +79,17 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
             >
               <Sparkles className="w-4 h-4 text-purple-600" />
               <span>Pulse BI</span>
+            </button>
+            <button
+              onClick={() => onSelectTab('campaigns')}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                activeTab === 'campaigns'
+                  ? 'bg-emerald-50 text-emerald-700 font-bold'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <Send className="w-4 h-4 text-emerald-600" />
+              <span>Campaigns</span>
             </button>
             <button
               onClick={() => onSelectTab('ai-agents')}

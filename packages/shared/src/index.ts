@@ -421,6 +421,84 @@ export interface PulseQueryResponse {
   executionTimeMs: number;
 }
 
+export type CampaignAudienceSegment =
+  | 'ALL_CUSTOMERS'
+  | 'CART_ABANDONERS'
+  | 'VIP_SPENDERS'
+  | 'INACTIVE_60_DAYS';
+
+export type CampaignChannel = 'META_WHATSAPP' | 'EMAIL';
+
+export type CampaignStatus = 'DRAFT' | 'SCHEDULED' | 'RUNNING' | 'COMPLETED' | 'PAUSED';
+
+export interface MarketingCampaign {
+  id: string;
+  name: string;
+  channel: CampaignChannel;
+  audienceSegment: CampaignAudienceSegment;
+  status: CampaignStatus;
+  messageTemplate: string;
+  recipientCount: number;
+  sentCount: number;
+  deliveredCount: number;
+  readCount: number;
+  clickedCount: number;
+  convertedCount: number;
+  attributedRevenue: number;
+  createdAt: string;
+  scheduledAt?: string;
+}
+
+export type VoiceCallStatus =
+  | 'INITIATED'
+  | 'RINGING'
+  | 'IN_PROGRESS'
+  | 'TRANSFER_REQUESTED'
+  | 'TRANSFERRED'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'BUSY'
+  | 'NO_ANSWER';
+
+export interface VoiceTranscriptionTurn {
+  id: string;
+  role: 'customer' | 'assistant' | 'human_agent';
+  transcript: string;
+  confidence: number;
+  durationMs: number;
+  timestamp: string;
+}
+
+export interface VoiceHandoffBriefing {
+  callId: string;
+  conversationId: string;
+  customerName?: string;
+  customerPhone?: string;
+  sentiment: 'POSITIVE' | 'NEUTRAL' | 'FRUSTRATED' | 'ANGRY';
+  intent: string;
+  summary: string;
+  customerKeyPoints: string[];
+  suggestedAction: string;
+  transferredToTeam?: string;
+  transferredAt: string;
+}
+
+export interface VoiceCallSession {
+  id: string;
+  organizationId: string;
+  channelId: string;
+  conversationId: string;
+  externalCallSid: string;
+  callerNumber: string;
+  calledNumber: string;
+  status: VoiceCallStatus;
+  turns: VoiceTranscriptionTurn[];
+  briefing?: VoiceHandoffBriefing;
+  durationSeconds?: number;
+  startedAt: string;
+  endedAt?: string;
+}
+
 export interface AuthTokenResponse {
   user: AuthenticatedUser;
   organizations: OrganizationSummary[];

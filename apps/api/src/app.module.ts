@@ -56,6 +56,10 @@ import { PulseService } from './pulse/pulse.service';
 import { PulseController } from './pulse/pulse.controller';
 import { McpService } from './mcp/mcp.service';
 import { McpController } from './mcp/mcp.controller';
+import { VoiceService } from './voice/voice.service';
+import { VoiceController } from './voice/voice.controller';
+import { CampaignsService } from './campaigns/campaigns.service';
+import { CampaignsController } from './campaigns/campaigns.controller';
 
 @Module({
   imports: [
@@ -89,6 +93,8 @@ import { McpController } from './mcp/mcp.controller';
     SocialController,
     PulseController,
     McpController,
+    VoiceController,
+    CampaignsController,
   ],
   providers: [
     PrismaService,
@@ -130,6 +136,8 @@ import { McpController } from './mcp/mcp.controller';
     SocialService,
     PulseService,
     McpService,
+    VoiceService,
+    CampaignsService,
   ],
   exports: [
     PrismaService,
@@ -161,6 +169,8 @@ import { McpController } from './mcp/mcp.controller';
     SocialService,
     PulseService,
     McpService,
+    VoiceService,
+    CampaignsService,
   ],
 })
 export class AppModule { }
