@@ -150,6 +150,19 @@ export class AuthController {
     };
   }
 
+  @Post('demo-request')
+  @HttpCode(HttpStatus.OK)
+  @RateLimit({ maxRequests: 10, windowMs: 60000, keyPrefix: 'auth_demo' })
+  async requestDemo(
+    @Body() body: { name: string; email: string; company: string; ticketVolume: string; channels?: string[] }
+  ): Promise<ApiResponse> {
+    const result = await this.authService.registerDemoRequest(body);
+    return {
+      success: true,
+      data: result,
+    };
+  }
+
   @Get('me')
   @UseGuards(JwtAuthGuard)
   async me(@CurrentUser() user: RequestUser): Promise<ApiResponse> {

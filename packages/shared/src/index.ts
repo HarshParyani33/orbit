@@ -231,6 +231,196 @@ export interface AnalyticsOverviewResponse {
   totalAutomationAuditsCount: number;
 }
 
+export interface OpenTicketsAnalytics {
+  totalOpen: number;
+  humanHandling: number;
+  aiHandling: number;
+  unassigned: number;
+  byStatus: Record<string, number>;
+  byPriority: Record<string, number>;
+  ageDistribution: {
+    zeroTo24h: number;
+    oneToTwoDays: number;
+    oneWeekToOneMonth: number;
+    overOneMonth: number;
+  };
+}
+
+export interface PerformanceTatAnalytics {
+  humanFrtMs: number;
+  aiFrtMs: number;
+  humanMttrMs: number;
+  aiMttrMs: number;
+  slaAdherencePercent: number;
+  responseTimeHistogram: Array<{ range: string; count: number }>;
+}
+
+export interface TicketTrendsAnalytics {
+  timeSeries: Array<{ date: string; total: number; ai: number; human: number }>;
+  byChannel: Record<string, number>;
+  byMessageType: Record<string, number>;
+}
+
+export interface WorkforceAnalytics {
+  agents: Array<{
+    id: string;
+    name: string;
+    email: string;
+    assigned: number;
+    resolved: number;
+    medianResponseTimeSec: number;
+    csatScore: number;
+  }>;
+  queueMetrics: {
+    enteredQueue: number;
+    assignedFromQueue: number;
+    medianWaitTimeSec: number;
+  };
+}
+
+export interface DeflectionAnalytics {
+  deflectionRatePercent: number;
+  deflectedCount: number;
+  escalatedCount: number;
+  dailyTrends: Array<{ date: string; deflected: number; escalated: number; rate: number }>;
+  topCategories: Array<{ category: string; count: number }>;
+}
+
+export interface BusiestTimesHeatmapAnalytics {
+  matrix: number[][]; // 7 days (rows) x 24 hours (cols)
+  peakDay: string;
+  peakHour: number;
+}
+
+export interface CsatAnalytics {
+  surveyCsat: number;
+  inferredCsat: number;
+  totalResponses: number;
+  starBreakdown: Record<number, number>;
+  sentimentDistribution: { positive: number; neutral: number; negative: number };
+  agentLeaderboard: Array<{ name: string; score: number; ratingsCount: number }>;
+}
+
+export interface TouchpointsFunnelAnalytics {
+  funnel: Array<{ stage: string; touches: string; count: number; percentage: number }>;
+  medianTouchesToResolution: number;
+}
+
+export interface SocialAnalytics {
+  inboundComments: number;
+  autoReplied: number;
+  escalatedToDm: number;
+  moderated: number;
+  sentimentBreakdown: { positive: number; neutral: number; negative: number };
+}
+
+export interface CampaignAnalytics {
+  sent: number;
+  delivered: number;
+  read: number;
+  clicked: number;
+  converted: number;
+  failed: number;
+  conversionRatePercent: number;
+}
+
+export interface CommerceLineItem {
+  id: string;
+  title: string;
+  quantity: number;
+  price: string;
+  thumbnailUrl?: string;
+  sku?: string;
+}
+
+export interface ShippingAddress {
+  name: string;
+  address1: string;
+  city: string;
+  province?: string;
+  country: string;
+  zip: string;
+}
+
+export type ShipmentStatus =
+  | 'ORDER_PLACED'
+  | 'IN_TRANSIT'
+  | 'OUT_FOR_DELIVERY'
+  | 'DELIVERED'
+  | 'NDR_EXCEPTION'
+  | 'RETURNED_TO_ORIGIN';
+
+export interface TrackingEvent {
+  timestamp: string;
+  location: string;
+  activity: string;
+}
+
+export interface ShipmentDetails {
+  carrier: string;
+  awbNumber: string;
+  trackingUrl?: string;
+  status: ShipmentStatus;
+  estimatedDelivery?: string;
+  lastLocation?: string;
+  events?: TrackingEvent[];
+}
+
+export interface CommerceOrder {
+  id: string;
+  orderNumber: string;
+  customerEmail: string;
+  customerPhone?: string;
+  createdAt: string;
+  currency: string;
+  totalPrice: string;
+  financialStatus: 'paid' | 'pending' | 'refunded' | 'partially_refunded' | 'voided';
+  fulfillmentStatus: 'fulfilled' | 'unfulfilled' | 'partial' | 'in_transit' | 'delivered' | 'returned';
+  lineItems: CommerceLineItem[];
+  shippingAddress?: ShippingAddress;
+  shipment?: ShipmentDetails;
+}
+
+export interface SocialPublicReply {
+  id: string;
+  content: string;
+  createdAt: string;
+  repliedBy: 'AI_AGENT' | 'HUMAN';
+}
+
+export interface SocialComment {
+  id: string;
+  postId: string;
+  postTitle: string;
+  postImageUrl?: string;
+  authorUsername: string;
+  authorAvatarUrl?: string;
+  content: string;
+  createdAt: string;
+  sentiment: 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE' | 'TOXIC';
+  status: 'PENDING' | 'REPLIED' | 'ESCALATED_TO_DM' | 'HIDDEN' | 'DELETED';
+  publicReply?: SocialPublicReply;
+  dmConversationId?: string;
+}
+
+export type PulseChartType = 'BAR' | 'LINE' | 'DONUT' | 'TABLE';
+
+export interface PulseChartData {
+  type: PulseChartType;
+  title: string;
+  labels: string[];
+  series: Array<{ name: string; data: number[] }>;
+  rawTable?: Array<Record<string, any>>;
+}
+
+export interface PulseQueryResponse {
+  answer: string;
+  chart?: PulseChartData;
+  suggestedNextQuestions?: string[];
+  executionTimeMs: number;
+}
+
+
 export type CampaignAudienceSegment =
   | 'ALL_CUSTOMERS'
   | 'CART_ABANDONERS'

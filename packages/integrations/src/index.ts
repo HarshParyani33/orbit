@@ -57,5 +57,11 @@ export * from './security/envelope-encryption.service';
 export * from './voice/types';
 export * from './voice/twilio-voice.provider';
 
+// Commerce & Logistics Adapters
+export * from './commerce/types';
+export * from './commerce/shopify-commerce.adapter';
+export * from './commerce/courier-logistics.adapter';
+
+
 
 

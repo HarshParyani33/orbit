@@ -4,14 +4,15 @@
   "private": true,
   "description": "Public Marketing Website, SEO, ROI Calculator & Lead Capture for Project Orbit",
   "scripts": {
-    "dev": "echo 'Next.js dev server ready'",
-    "build": "tsc --noEmit",
-    "start": "echo 'Next.js start server ready'",
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start -p 3001",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@orbit/shared": "*",
     "@orbit/validation": "*",
+    "next": "^14.2.24",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

@@ -516,4 +516,18 @@ export class AuthService {
       message: 'Password has been updated successfully. All previous sessions have been signed out.',
     };
   }
+
+  async registerDemoRequest(input: {
+    name: string;
+    email: string;
+    company: string;
+    ticketVolume: string;
+    channels?: string[];
+  }): Promise<{ message: string; scheduled: boolean }> {
+    console.log(`[Demo Lead Capture] Name: ${input.name}, Email: ${input.email}, Company: ${input.company}, Volume: ${input.ticketVolume}`);
+    return {
+      message: 'Demo request registered successfully. Our enterprise team will send a calendar invite.',
+      scheduled: true,
+    };
+  }
 }
