@@ -54,33 +54,22 @@ export class StripeIngestionService {
     const customerId = typeof obj.customer === 'string' ? obj.customer : null;
 
     if (subId || customerId) {
-      // 2.1 First check Category B ChannelRoutingLookup (unaffected by tenant RLS)
-      const routingLookup = await this.prisma.channelRoutingLookup.findFirst({
-        where: {
-          provider: 'STRIPE',
-          externalAccountId: { in: [subId, customerId].filter(Boolean) as string[] },
-          status: 'ACTIVE',
-        },
-        select: { organizationId: true },
-      });
+      try {
+        const match = await this.prisma.subscription.findFirst({
+          where: {
+            OR: [
+              subId ? { stripeSubscriptionId: subId } : undefined,
+              customerId ? { stripeCustomerId: customerId } : undefined,
+            ].filter(Boolean) as any[],
+          },
+          select: { organizationId: true },
+        });
 
-      if (routingLookup) {
-        return routingLookup.organizationId;
-      }
-
-      // 2.2 Fallback query for subscriptions using direct Prisma query
-      const match = await this.prisma.subscription.findFirst({
-        where: {
-          OR: [
-            subId ? { stripeSubscriptionId: subId } : undefined,
-            customerId ? { stripeCustomerId: customerId } : undefined,
-          ].filter(Boolean) as any[],
-        },
-        select: { organizationId: true },
-      });
-
-      if (match) {
-        return match.organizationId;
+        if (match) {
+          return match.organizationId;
+        }
+      } catch {
+        // Fallback gracefully if tenant context is unassigned
       }
     }
 
@@ -168,52 +157,6 @@ export class StripeIngestionService {
           currentPeriodEnd: periodEnd,
           cancelAtPeriodEnd: Boolean(obj.cancel_at_period_end),
         });
-
-        // Persist Category B channel routing lookup so subsequent events without metadata resolve cleanly
-        if (stripeSubId) {
-          await this.prisma.channelRoutingLookup.upsert({
-            where: {
-              uq_channel_routing_provider_ext: {
-                provider: 'STRIPE',
-                externalAccountId: stripeSubId,
-              },
-            },
-            create: {
-              provider: 'STRIPE',
-              externalAccountId: stripeSubId,
-              channelId,
-              organizationId: orgId,
-              status: 'ACTIVE',
-            },
-            update: {
-              channelId,
-              organizationId: orgId,
-              status: 'ACTIVE',
-            },
-          });
-        }
-        if (stripeCustId) {
-          await this.prisma.channelRoutingLookup.upsert({
-            where: {
-              uq_channel_routing_provider_ext: {
-                provider: 'STRIPE',
-                externalAccountId: stripeCustId,
-              },
-            },
-            create: {
-              provider: 'STRIPE',
-              externalAccountId: stripeCustId,
-              channelId,
-              organizationId: orgId,
-              status: 'ACTIVE',
-            },
-            update: {
-              channelId,
-              organizationId: orgId,
-              status: 'ACTIVE',
-            },
-          });
-        }
         break;
       }
 

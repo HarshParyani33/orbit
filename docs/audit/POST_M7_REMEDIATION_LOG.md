@@ -120,12 +120,32 @@
 
 ---
 
+## Remediation 7: Enforce Category C Zero Direct Access Invariant in Stripe Ingestion
+
+- **Symptom:** `tests/integration/stripe-billing.spec.ts` failed with HTTP 500 (`PostgresError 42501: permission denied for table channel_routing_lookups`).
+- **Root Cause:** `stripe-ingestion.service.ts` attempted to directly query and upsert records into `channel_routing_lookups` using `orbit_app` database credentials. `channel_routing_lookups` is Category C routing infrastructure with explicit `REVOKE ALL ON TABLE channel_routing_lookups FROM orbit_app` (tested in `db-permissions.spec.ts`).
+- **Action Taken:**
+  1. Removed direct `this.prisma.channelRoutingLookup` queries and upserts from `apps/api/src/webhooks/stripe-ingestion.service.ts`.
+  2. Preserved subscription persistence via `this.billingService.upsertStripeSubscription` and direct `subscription` resolution within tenant RLS.
+  3. Rebuilt `@orbit/api` and verified all 11 tests in `stripe-billing.spec.ts` pass cleanly.
+- **Verification Command & Output:**
+  ```bash
+  npx vitest run tests/integration/stripe-billing.spec.ts --config vitest.integration.config.ts
+  # Output: 1 passed (1), 11 passed (11). Duration: 8.68s. Exited code 0.
+  ```
+
+---
+
 ## Comprehensive Final Suite Verification
 
 | Check | Command | Result |
 |---|---|:---:|
 | **Unit Tests** | `npm run test:unit` | **PASS (22/22 files, 119/119 tests)** |
 | **Browser Tests** | `npm run test:browser` | **PASS (8/8 Playwright multi-tab tests)** |
+| **Integration Tests** | `npm run test:integration` | **PASS (22/22 files, 254/254 tests)** |
+| **Database Migrations** | `prisma migrate status` | **PASS (9/9 migrations up to date)** |
+| **Database Seeding** | `npm run db:seed` | **PASS (catalogs & pricing seeded)** |
 | **Typecheck** | `npm run typecheck` | **PASS (tsc --build zero errors)** |
 | **Linting** | `npm run lint` | **PASS (eslint zero errors)** |
 | **Monorepo Build** | `npm run build` | **PASS (all 11 apps & packages built)** |
+| **Grand Total Automated Tests** | `vitest run` | **381/381 PASSED (100%)** |
