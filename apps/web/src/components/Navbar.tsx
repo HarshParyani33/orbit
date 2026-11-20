@@ -27,121 +27,110 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
           <nav className="hidden sm:flex items-center space-x-1 border-l border-slate-200 pl-6">
             <button
               onClick={() => onSelectTab('inbox')}
-              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                activeTab === 'inbox'
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${activeTab === 'inbox'
                   ? 'bg-indigo-50 text-indigo-700'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
+                }`}
             >
               <Inbox className="w-4 h-4" />
               <span>Inbox</span>
             </button>
             <button
               onClick={() => onSelectTab('customers')}
-              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                activeTab === 'customers'
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${activeTab === 'customers'
                   ? 'bg-indigo-50 text-indigo-700'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
+                }`}
             >
               <Users className="w-4 h-4" />
               <span>Customers</span>
             </button>
             <button
               onClick={() => onSelectTab('social')}
-              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                activeTab === 'social'
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${activeTab === 'social'
                   ? 'bg-pink-50 text-pink-700 font-bold'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
+                }`}
             >
               <Share2 className="w-4 h-4 text-pink-600" />
               <span>Social</span>
             </button>
             <button
               onClick={() => onSelectTab('analytics')}
-              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                activeTab === 'analytics'
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${activeTab === 'analytics'
                   ? 'bg-indigo-50 text-indigo-700'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
+                }`}
             >
               <BarChart3 className="w-4 h-4" />
               <span>Analytics</span>
             </button>
             <button
               onClick={() => onSelectTab('pulse')}
-              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                activeTab === 'pulse'
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${activeTab === 'pulse'
                   ? 'bg-purple-50 text-purple-700 font-bold'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
+                }`}
             >
               <Sparkles className="w-4 h-4 text-purple-600" />
               <span>Pulse BI</span>
             </button>
             <button
               onClick={() => onSelectTab('campaigns')}
-              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                activeTab === 'campaigns'
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${activeTab === 'campaigns'
                   ? 'bg-emerald-50 text-emerald-700 font-bold'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
+                }`}
             >
               <Send className="w-4 h-4 text-emerald-600" />
               <span>Campaigns</span>
             </button>
             <button
               onClick={() => onSelectTab('ai-agents')}
-              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                activeTab === 'ai-agents'
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${activeTab === 'ai-agents'
                   ? 'bg-purple-50 text-purple-700 font-bold'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
+                }`}
             >
               <Bot className="w-4 h-4 text-purple-600" />
               <span>AI Studio</span>
             </button>
             <button
               onClick={() => onSelectTab('channels')}
-              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                activeTab === 'channels'
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${activeTab === 'channels'
                   ? 'bg-indigo-50 text-indigo-700'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
+                }`}
             >
               <Layers className="w-4 h-4" />
               <span>Channels</span>
             </button>
             <button
               onClick={() => onSelectTab('knowledge')}
-              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                activeTab === 'knowledge'
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${activeTab === 'knowledge'
                   ? 'bg-indigo-50 text-indigo-700'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
+                }`}
             >
               <BookOpen className="w-4 h-4" />
               <span>Knowledge Base</span>
             </button>
             <button
               onClick={() => onSelectTab('billing')}
-              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                activeTab === 'billing'
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${activeTab === 'billing'
                   ? 'bg-indigo-50 text-indigo-700'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
+                }`}
             >
               <CreditCard className="w-4 h-4" />
               <span>Billing & Wallet</span>
             </button>
             <button
               onClick={() => onSelectTab('settings')}
-              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                activeTab === 'settings'
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${activeTab === 'settings'
                   ? 'bg-indigo-50 text-indigo-700'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
+                }`}
             >
               <Settings className="w-4 h-4" />
               <span>Settings</span>

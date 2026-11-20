@@ -22,7 +22,7 @@ import {
 @Controller('api/ai')
 @UseGuards(JwtAuthGuard, TenantGuard, RateLimitGuard)
 export class AiController {
-  constructor(@Inject(AiService) private readonly aiService: AiService) {}
+  constructor(@Inject(AiService) private readonly aiService: AiService) { }
 
   @Get('config')
   async getActiveConfig(@CurrentTenant() tenant: TenantContext): Promise<ApiResponse> {

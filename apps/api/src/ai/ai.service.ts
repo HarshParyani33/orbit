@@ -30,7 +30,7 @@ export class AiService {
     @Optional()
     @Inject(KnowledgeService)
     private readonly knowledgeService?: KnowledgeService,
-  ) {}
+  ) { }
 
   private getProviderInstance(provider: string, model: string): IAiProvider {
     if (provider === 'OPENAI') {
@@ -132,234 +132,234 @@ export class AiService {
     conversationId: string,
     options?: { mockReply?: string; minSimilarity?: number }
   ) {
-    // =========================================================================
-    // PHASE 1: PRE-FLIGHT DATABASE TRANSACTION (Scoped, Short-lived)
-    // =========================================================================
-    const preflight = await this.tenantRunner.runWithTenant<any>(organizationId, async (tx) => {
-      // 1. Fetch conversation and messages
-      const conversation = await tx.conversation.findFirst({
-        where: { id: conversationId, organizationId },
-        include: {
-          messages: {
-            orderBy: { createdAt: 'asc' },
-            take: 20,
+      // =========================================================================
+      // PHASE 1: PRE-FLIGHT DATABASE TRANSACTION (Scoped, Short-lived)
+      // =========================================================================
+      const preflight = await this.tenantRunner.runWithTenant<any>(organizationId, async (tx) => {
+        // 1. Fetch conversation and messages
+        const conversation = await tx.conversation.findFirst({
+          where: { id: conversationId, organizationId },
+          include: {
+            messages: {
+              orderBy: { createdAt: 'asc' },
+              take: 20,
+            },
           },
-        },
-      });
+        });
 
-      if (!conversation) {
-        throw new NotFoundException('Conversation not found');
-      }
+        if (!conversation) {
+          throw new NotFoundException('Conversation not found');
+        }
 
-      // 2. Human Takeover Invariant Check
-      if (conversation.status === 'SNOOZED' || conversation.status === 'RESOLVED') {
-        return {
-          bypassed: true as const,
-          bypassPayload: {
-            bypassed: true,
-            reason: 'HUMAN_TAKEOVER_STATUS_CLOSED',
-            message: 'AI generation skipped: conversation is snoozed or resolved',
-          },
-        };
-      }
-
-      const lastMessage = conversation.messages[conversation.messages.length - 1];
-      if (lastMessage && lastMessage.senderType === 'AGENT') {
-        return {
-          bypassed: true as const,
-          bypassPayload: {
-            bypassed: true,
-            reason: 'HUMAN_TAKEOVER_AGENT_REPLIED',
-            message: 'AI generation skipped: agent has already replied to customer',
-          },
-        };
-      }
-
-      // 3. Resolve active tenant AI configuration
-      const aiConfig = await tx.aiConfiguration.findFirst({
-        where: {
-          organizationId,
-          status: 'ACTIVE',
-        },
-        orderBy: { version: 'desc' },
-      });
-
-      if (!aiConfig) {
-        throw new BadRequestException('No active AI configuration found for this organization');
-      }
-
-      // 3.5. Wallet & Credit Balance Check (Fail-Closed Protocol)
-      const subscription = await tx.subscription.findUnique({
-        where: { organizationId },
-      });
-
-      if (subscription && subscription.aiTokenAllowance <= 0) {
-        return {
-          bypassed: true as const,
-          bypassPayload: {
-            bypassed: true,
-            reason: 'INSUFFICIENT_CREDITS',
-            message:
-              'AI generation bypassed: workspace AI credit balance is exhausted. Escalated to human agent queue.',
-            escalatedToHuman: true,
-          },
-        };
-      }
-
-      // 4. Pre-Flight Pricing Schedule Resolution (Fail-Closed Protocol)
-      const pricing = await tx.aiModelPricingSchedule.findFirst({
-        where: {
-          provider: aiConfig.provider,
-          canonicalModel: aiConfig.model,
-          effectiveFrom: { lte: new Date() },
-          OR: [{ effectiveTo: null }, { effectiveTo: { gt: new Date() } }],
-        },
-        orderBy: { effectiveFrom: 'desc' },
-      });
-
-      if (!pricing) {
-        throw new BadRequestException(
-          `Missing pricing schedule for provider ${aiConfig.provider} and model ${aiConfig.model}`
-        );
-      }
-
-      // 5. Response Guard & Policy Safety Checks
-      let competitorBlacklist: string[] = [];
-      let isSupervisedReview = false;
-
-      if (Array.isArray(aiConfig.policyRules)) {
-        // Simple string array format
-      } else if (aiConfig.policyRules && typeof aiConfig.policyRules === 'object') {
-        const rulesObj = aiConfig.policyRules as Record<string, any>;
-        competitorBlacklist = Array.isArray(rulesObj.competitors) ? rulesObj.competitors : [];
-        isSupervisedReview = Boolean(rulesObj.supervisedReview);
-      }
-
-      // Check incoming customer query for competitor mentions
-      const lastCustMessage = [...conversation.messages]
-        .reverse()
-        .find((m) => m.senderType === 'CUSTOMER');
-
-      if (lastCustMessage && competitorBlacklist.length > 0) {
-        const lowerContent = lastCustMessage.content.toLowerCase();
-        const matchedCompetitor = competitorBlacklist.find((comp) =>
-          lowerContent.includes(comp.toLowerCase())
-        );
-
-        if (matchedCompetitor) {
+        // 2. Human Takeover Invariant Check
+        if (conversation.status === 'SNOOZED' || conversation.status === 'RESOLVED') {
           return {
             bypassed: true as const,
             bypassPayload: {
               bypassed: true,
-              reason: 'RESPONSE_GUARD_COMPETITOR_FLAG',
-              message: `Customer message mentions competitor "${matchedCompetitor}". Escalated to human agent review.`,
+              reason: 'HUMAN_TAKEOVER_STATUS_CLOSED',
+              message: 'AI generation skipped: conversation is snoozed or resolved',
+            },
+          };
+        }
+
+        const lastMessage = conversation.messages[conversation.messages.length - 1];
+        if (lastMessage && lastMessage.senderType === 'AGENT') {
+          return {
+            bypassed: true as const,
+            bypassPayload: {
+              bypassed: true,
+              reason: 'HUMAN_TAKEOVER_AGENT_REPLIED',
+              message: 'AI generation skipped: agent has already replied to customer',
+            },
+          };
+        }
+
+        // 3. Resolve active tenant AI configuration
+        const aiConfig = await tx.aiConfiguration.findFirst({
+          where: {
+            organizationId,
+            status: 'ACTIVE',
+          },
+          orderBy: { version: 'desc' },
+        });
+
+        if (!aiConfig) {
+          throw new BadRequestException('No active AI configuration found for this organization');
+        }
+
+        // 3.5. Wallet & Credit Balance Check (Fail-Closed Protocol)
+        const subscription = await tx.subscription.findUnique({
+          where: { organizationId },
+        });
+
+        if (subscription && subscription.aiTokenAllowance <= 0) {
+          return {
+            bypassed: true as const,
+            bypassPayload: {
+              bypassed: true,
+              reason: 'INSUFFICIENT_CREDITS',
+              message:
+                'AI generation bypassed: workspace AI credit balance is exhausted. Escalated to human agent queue.',
               escalatedToHuman: true,
             },
           };
         }
-      }
 
-      // 5.1 Semantic Knowledge Retrieval & Grounding
-      let dynamicInstructions = aiConfig.systemInstructions;
-      const chunkMap = new Map<string, GroundingSourceChunk>();
-
-      if (this.knowledgeService) {
-        const docCount = await tx.knowledgeDocument.count({
-          where: { organizationId, status: 'ACTIVE' },
+        // 4. Pre-Flight Pricing Schedule Resolution (Fail-Closed Protocol)
+        const pricing = await tx.aiModelPricingSchedule.findFirst({
+          where: {
+            provider: aiConfig.provider,
+            canonicalModel: aiConfig.model,
+            effectiveFrom: { lte: new Date() },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: new Date() } }],
+          },
+          orderBy: { effectiveFrom: 'desc' },
         });
 
-        if (docCount > 0) {
-          const lastCustomerMsg = [...conversation.messages]
-            .reverse()
-            .find((m) => m.senderType === 'CUSTOMER');
+        if (!pricing) {
+          throw new BadRequestException(
+            `Missing pricing schedule for provider ${aiConfig.provider} and model ${aiConfig.model}`
+          );
+        }
 
-          if (lastCustomerMsg && lastCustomerMsg.content) {
-            const knowledgeResults = await this.knowledgeService.searchSimilarChunks(
-              organizationId,
-              {
-                query: lastCustomerMsg.content,
-                minSimilarity: options?.minSimilarity ?? 0.7,
-                limit: 3,
+        // 5. Response Guard & Policy Safety Checks
+        let competitorBlacklist: string[] = [];
+        let isSupervisedReview = false;
+
+        if (Array.isArray(aiConfig.policyRules)) {
+          // Simple string array format
+        } else if (aiConfig.policyRules && typeof aiConfig.policyRules === 'object') {
+          const rulesObj = aiConfig.policyRules as Record<string, any>;
+          competitorBlacklist = Array.isArray(rulesObj.competitors) ? rulesObj.competitors : [];
+          isSupervisedReview = Boolean(rulesObj.supervisedReview);
+        }
+
+        // Check incoming customer query for competitor mentions
+        const lastCustMessage = [...conversation.messages]
+          .reverse()
+          .find((m) => m.senderType === 'CUSTOMER');
+
+        if (lastCustMessage && competitorBlacklist.length > 0) {
+          const lowerContent = lastCustMessage.content.toLowerCase();
+          const matchedCompetitor = competitorBlacklist.find((comp) =>
+            lowerContent.includes(comp.toLowerCase())
+          );
+
+          if (matchedCompetitor) {
+            return {
+              bypassed: true as const,
+              bypassPayload: {
+                bypassed: true,
+                reason: 'RESPONSE_GUARD_COMPETITOR_FLAG',
+                message: `Customer message mentions competitor "${matchedCompetitor}". Escalated to human agent review.`,
+                escalatedToHuman: true,
               },
-            );
-
-            if (knowledgeResults.totalMatched === 0) {
-              // Insufficient-Evidence Abstention
-              return {
-                bypassed: true as const,
-                bypassPayload: {
-                  bypassed: true,
-                  reason: 'LOW_RELEVANCE',
-                  message:
-                    'I do not have sufficient information regarding that, but I can connect you with our team.',
-                  escalatedToHuman: true,
-                },
-              };
-            }
-
-            for (const item of knowledgeResults.results) {
-              chunkMap.set(item.id, {
-                id: item.id,
-                chunkText: item.chunkText,
-                documentTitle: item.documentTitle,
-              });
-            }
-
-            const knowledgeBlock =
-              `\n\n<verified_knowledge>\n` +
-              knowledgeResults.results
-                .map(
-                  (r) =>
-                    `[Source: ${r.id}] (Title: "${r.documentTitle}")\n${r.chunkText}`,
-                )
-                .join('\n\n') +
-              `\n</verified_knowledge>\n` +
-              `CRITICAL INSTRUCTION: You MUST ground your answer strictly in the <verified_knowledge> above. For every factual claim, number, or price, you MUST cite the source chunk using [Source: chunk-id] format. Never fabricate citations or claim facts not present in the sources.`;
-
-            dynamicInstructions = `${dynamicInstructions || ''}\n${knowledgeBlock}`;
+            };
           }
         }
-      }
 
-      const promptMessages: AiMessage[] = conversation.messages.map((m) => {
-        if (m.senderType === 'CUSTOMER') {
-          return {
-            role: 'user' as const,
-            content: `<customer_message>\n${m.content}\n</customer_message>`,
-          };
-        } else {
-          return {
-            role: 'assistant' as const,
-            content: m.content,
-          };
+        // 5.1 Semantic Knowledge Retrieval & Grounding
+        let dynamicInstructions = aiConfig.systemInstructions;
+        const chunkMap = new Map<string, GroundingSourceChunk>();
+
+        if (this.knowledgeService) {
+          const docCount = await tx.knowledgeDocument.count({
+            where: { organizationId, status: 'ACTIVE' },
+          });
+
+          if (docCount > 0) {
+            const lastCustomerMsg = [...conversation.messages]
+              .reverse()
+              .find((m) => m.senderType === 'CUSTOMER');
+
+            if (lastCustomerMsg && lastCustomerMsg.content) {
+              const knowledgeResults = await this.knowledgeService.searchSimilarChunks(
+                organizationId,
+                {
+                  query: lastCustomerMsg.content,
+                  minSimilarity: options?.minSimilarity ?? 0.7,
+                  limit: 3,
+                },
+              );
+
+              if (knowledgeResults.totalMatched === 0) {
+                // Insufficient-Evidence Abstention
+                return {
+                  bypassed: true as const,
+                  bypassPayload: {
+                    bypassed: true,
+                    reason: 'LOW_RELEVANCE',
+                    message:
+                      'I do not have sufficient information regarding that, but I can connect you with our team.',
+                    escalatedToHuman: true,
+                  },
+                };
+              }
+
+              for (const item of knowledgeResults.results) {
+                chunkMap.set(item.id, {
+                  id: item.id,
+                  chunkText: item.chunkText,
+                  documentTitle: item.documentTitle,
+                });
+              }
+
+              const knowledgeBlock =
+                `\n\n<verified_knowledge>\n` +
+                knowledgeResults.results
+                  .map(
+                    (r) =>
+                      `[Source: ${r.id}] (Title: "${r.documentTitle}")\n${r.chunkText}`,
+                  )
+                  .join('\n\n') +
+                `\n</verified_knowledge>\n` +
+                `CRITICAL INSTRUCTION: You MUST ground your answer strictly in the <verified_knowledge> above. For every factual claim, number, or price, you MUST cite the source chunk using [Source: chunk-id] format. Never fabricate citations or claim facts not present in the sources.`;
+
+              dynamicInstructions = `${dynamicInstructions || ''}\n${knowledgeBlock}`;
+            }
+          }
         }
+
+        const promptMessages: AiMessage[] = conversation.messages.map((m) => {
+          if (m.senderType === 'CUSTOMER') {
+            return {
+              role: 'user' as const,
+              content: `<customer_message>\n${m.content}\n</customer_message>`,
+            };
+          } else {
+            return {
+              role: 'assistant' as const,
+              content: m.content,
+            };
+          }
+        });
+
+        // 6. Record logical AI Request (The Customer Turn) in PENDING status
+        const idempotencyKey = `ai_req_${conversationId}_${Date.now()}`;
+        const aiRequest = await tx.aiRequest.create({
+          data: {
+            organizationId,
+            conversationId,
+            idempotencyKey,
+            status: 'PENDING',
+          },
+        });
+
+        return {
+          bypassed: false as const,
+          aiRequest,
+          aiConfig,
+          pricing,
+          promptMessages,
+          dynamicInstructions,
+          policyRules: aiConfig.policyRules,
+          chunkMap,
+        };
       });
 
-      // 6. Record logical AI Request (The Customer Turn) in PENDING status
-      const idempotencyKey = `ai_req_${conversationId}_${Date.now()}`;
-      const aiRequest = await tx.aiRequest.create({
-        data: {
-          organizationId,
-          conversationId,
-          idempotencyKey,
-          status: 'PENDING',
-        },
-      });
-
-      return {
-        bypassed: false as const,
-        aiRequest,
-        aiConfig,
-        pricing,
-        promptMessages,
-        dynamicInstructions,
-        policyRules: aiConfig.policyRules,
-        chunkMap,
-      };
-    });
-
-    if (preflight.bypassed) {
-      return preflight.bypassPayload;
+        if(preflight.bypassed) {
+          return preflight.bypassPayload;
     }
 
     const {

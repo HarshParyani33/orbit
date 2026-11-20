@@ -33,7 +33,7 @@ export class OrganizationsController {
   constructor(
     @Inject(OrganizationsService) private readonly orgService: OrganizationsService,
     @Inject(BusinessHoursService) private readonly businessHoursService: BusinessHoursService
-  ) {}
+  ) { }
 
   @Get()
   async listUserOrganizations(@CurrentUser() user: RequestUser): Promise<ApiResponse> {

@@ -26,7 +26,7 @@ export class StripeIngestionService {
     private readonly tenantRunner: TenantTransactionRunner,
     @Inject(PrismaService)
     private readonly prisma: PrismaService
-  ) {}
+  ) { }
 
   /**
    * Resolve organization ID associated with Stripe event.
